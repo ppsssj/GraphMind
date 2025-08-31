@@ -1,12 +1,11 @@
+import { useMemo, useRef, useState, useEffect } from "react";
 import { Canvas } from "@react-three/fiber";
-import { OrbitControls, Line, TransformControls, Html } from "@react-three/drei";
-import { useMemo, useRef, useState } from "react";
+import { OrbitControls, Line, DragControls, Text } from "@react-three/drei";
 import * as THREE from "three";
 
 function Axes() {
-  const group = useRef();
   return (
-    <group ref={group}>
+    <group>
       <axesHelper args={[8]} />
       <gridHelper args={[16, 16]} rotation={[Math.PI / 2, 0, 0]} />
     </group>
@@ -14,66 +13,105 @@ function Axes() {
 }
 
 function Curve({ fn, xmin, xmax }) {
-  const points = useMemo(() => {
-    const pts = [];
-    const steps = 200;
+  const pts = useMemo(() => {
+    const out = [];
+    const steps = 220;
     const dx = (xmax - xmin) / steps;
     for (let i = 0; i <= steps; i++) {
       const x = xmin + dx * i;
       const y = fn(x);
-      pts.push(new THREE.Vector3(x, y, 0));
+      out.push(new THREE.Vector3(x, y, 0));
     }
-    return pts;
+    return out;
   }, [fn, xmin, xmax]);
-  return <Line points={points} lineWidth={2} />;
+  return <Line points={pts} lineWidth={2} />;
 }
 
-function DraggablePoint({ index, position, onChange, setControlsActive }) {
-  const ref = useRef();
-  const [selected, setSelected] = useState(false);
+function DraggablePoint({
+  index,
+  position,
+  onChange,
+  setControlsActive,
+  setDraggingIndex,
+}) {
+  const meshRef = useRef();
+  const [labelXY, setLabelXY] = useState({ x: position.x, y: position.y });
 
-  const sphere = (
-    <mesh
-      ref={ref}
-      position={[position.x, position.y, 0]}
-      onClick={(e) => {
-        e.stopPropagation();
-        setSelected(true);
+  // 부모의 position 변경과 동기화
+  useEffect(() => {
+    setLabelXY({ x: position.x, y: position.y });
+    if (meshRef.current) meshRef.current.position.set(position.x, position.y, 0);
+  }, [position.x, position.y]);
+
+  const handleDrag = () => {
+    const p = meshRef.current?.position;
+    if (!p) return;
+    if (p.z !== 0) p.set(p.x, p.y, 0); // XY 평면 고정
+    setLabelXY({ x: p.x, y: p.y });
+    onChange(index, { x: p.x, y: p.y });
+  };
+
+  return (
+    <DragControls
+      transformGroup
+      onDragStart={() => {
+        setControlsActive(true);
+        setDraggingIndex(index);
+      }}
+      onDrag={handleDrag}
+      onDragEnd={() => {
+        setControlsActive(false);
+        setDraggingIndex(null);
       }}
     >
-      <sphereGeometry args={[0.07, 24, 24]} />
-      <meshStandardMaterial color={"white"} />
-      <Html position={[0.1, 0.1, 0]} style={{ pointerEvents: "none" }}>
-        <div className="pt-label">{index + 1}</div>
-      </Html>
-    </mesh>
-  );
-
-  return selected ? (
-    <TransformControls
-      mode="translate"
-      showZ={false}
-      position={[position.x, position.y, 0]}
-      onMouseDown={() => setControlsActive(true)}
-      onMouseUp={() => setControlsActive(false)}
-      onObjectChange={() => {
-        const p = ref.current.position;
-        onChange(index, { x: p.x, y: p.y });
-      }}
-      onPointerMissed={() => setSelected(false)}
-    >
-      {sphere}
-    </TransformControls>
-  ) : (
-    sphere
+      <mesh ref={meshRef} position={[position.x, position.y, 0]}>
+        <sphereGeometry args={[0.07, 24, 24]} />
+        <meshStandardMaterial color="white" />
+        {/* 3D 텍스트 라벨: 클릭/드래그 방해 없음 */}
+        <group position={[0.14, 0.12, 0]}>
+          <Text
+            fontSize={0.16}
+            anchorX="left"
+            anchorY="bottom"
+            outlineWidth={0.004}
+            outlineColor="black"
+          >
+            {`(${labelXY.x.toFixed(2)}, ${labelXY.y.toFixed(2)})`}
+          </Text>
+        </group>
+      </mesh>
+    </DragControls>
   );
 }
 
 export default function GraphCanvas({ points, onPointChange, xmin, xmax, fn }) {
-  const [controlsBusy, setControlsBusy] = useState(false);
+  const [controlsBusy, setControlsActive] = useState(false);
+  const [draggingIndex, setDraggingIndex] = useState(null);
 
   return (
-    <div className="canvas-wrap">
+    <div className="canvas-wrap" style={{ position: "relative" }}>
+      {/* 드래그 중 좌상단 HUD (밑 클릭 방해 안 하도록) */}
+      {draggingIndex !== null && (
+        <div
+          style={{
+            position: "absolute",
+            left: 12,
+            top: 12,
+            zIndex: 10,
+            background: "rgba(0,0,0,0.55)",
+            color: "white",
+            padding: "6px 8px",
+            borderRadius: 8,
+            fontSize: 12,
+            pointerEvents: "none",
+            userSelect: "none",
+          }}
+        >
+          P{draggingIndex}: ({points[draggingIndex].x.toFixed(3)},{" "}
+          {points[draggingIndex].y.toFixed(3)})
+        </div>
+      )}
+
       <Canvas camera={{ position: [0, 0, 12], fov: 50 }}>
         <ambientLight intensity={0.7} />
         <directionalLight position={[5, 8, 10]} intensity={0.6} />
@@ -87,7 +125,8 @@ export default function GraphCanvas({ points, onPointChange, xmin, xmax, fn }) {
             index={i}
             position={{ x: p.x, y: p.y }}
             onChange={onPointChange}
-            setControlsActive={setControlsBusy}
+            setControlsActive={setControlsActive}
+            setDraggingIndex={setDraggingIndex}
           />
         ))}
 
