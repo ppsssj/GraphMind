@@ -1,0 +1,90 @@
+.studio-root {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  height: 100vh;
+}
+.left-panel {
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding: 16px;
+  overflow: auto;
+}
+.section {
+  margin-bottom: 18px;
+}
+.label {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.input {
+  width: 100%;
+  background: #0f0f14;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.apply {
+  margin-top: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: none;
+  background: var(--accent);
+  color: #0f0717;
+  font-weight: 700;
+}
+.equation {
+  background: #0f0f14;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.num {
+  width: 100%;
+  padding: 8px 10px;
+  background: #0f0f14;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.dash {
+  color: var(--muted);
+}
+.range {
+  width: 100%;
+}
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 6px;
+}
+.note {
+  color: var(--muted);
+  font-size: 12px;
+  border-top: 1px dashed var(--border);
+  padding-top: 10px;
+}
+
+.canvas-wrap {
+  height: 100vh;
+}
+.pt-label {
+  background: rgba(10, 10, 16, 0.7);
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+}
