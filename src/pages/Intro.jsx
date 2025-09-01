@@ -203,7 +203,7 @@ export default function Intro() {
               onClick={() => nav("/studio")}
               aria-label="그래프를 그리다 페이지로 이동"
             >
-              draw now graphs
+              Draw Now Graphs
             </button>
           </div>
         </section>

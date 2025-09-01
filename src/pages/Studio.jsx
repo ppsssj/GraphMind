@@ -8,7 +8,6 @@ const math = create(all, {});
 
 // ----- 최소자승 다항식 피팅(로컬 구현) -----
 function vander(xs, degree) {
-  // X: (n x (d+1)) with columns [x^0, x^1, ..., x^d]
   const n = xs.length;
   const d1 = degree + 1;
   const X = Array.from({ length: n }, () => Array(d1).fill(0));
@@ -21,7 +20,6 @@ function vander(xs, degree) {
   }
   return X;
 }
-
 function matT(X) {
   const r = X.length, c = X[0].length;
   const T = Array.from({ length: c }, () => Array(r).fill(0));
@@ -49,14 +47,13 @@ function matVec(A, v) {
   }
   return out;
 }
-// 간단한 가우스 소거 (A c = b) 풀이
+// 가우스 소거
 function solveLinear(Ain, bin) {
   const n = Ain.length;
   const A = Ain.map(row => row.slice());
   const b = bin.slice();
 
   for (let i = 0; i < n; i++) {
-    // pivot
     let piv = i;
     for (let r = i + 1; r < n; r++) if (Math.abs(A[r][i]) > Math.abs(A[piv][i])) piv = r;
     if (Math.abs(A[piv][i]) < 1e-12) continue;
@@ -76,15 +73,13 @@ function solveLinear(Ain, bin) {
   }
   return b; // now b is the solution
 }
-
 function fitPolyCoeffs(xs, ys, degree) {
-  const X = vander(xs, degree);      // n x (d+1)
-  const XT = matT(X);                // (d+1) x n
-  const XT_X = matMul(XT, X);        // (d+1) x (d+1)
-  const XT_y = matVec(XT, ys);       // (d+1)
-  return solveLinear(XT_X, XT_y);    // coeffs c0..cd
+  const X = vander(xs, degree);
+  const XT = matT(X);
+  const XT_X = matMul(XT, X);
+  const XT_y = matVec(XT, ys);
+  return solveLinear(XT_X, XT_y);
 }
-
 function coeffsToFn(coeffs) {
   return (x) => {
     let y = 0, p = 1;
@@ -95,7 +90,6 @@ function coeffsToFn(coeffs) {
     return y;
   };
 }
-
 function coeffsToPretty(coeffs, digits = 4) {
   return coeffs
     .map((c, i) => {
@@ -121,20 +115,26 @@ export default function Studio() {
   // 초기 포인트
   const [points, setPoints] = useState(() => {
     const n = 8;
-    const xs = Array.from({ length: n }, (_, i) => xmin + ((xmax - xmin) * i) / (n - 1));
+    const xs = Array.from({ length: n }, (_, i) => -3 + (6 * i) / (n - 1));
     const fn0 = (x) => 0.5 * x * x * x - 2 * x;
     return xs.map((x, i) => ({ id: i, x, y: fn0(x) }));
   });
 
   // ✅ 점/차수 변경 시마다 재피팅 → 렌더용 함수 갱신
   const coeffs = useMemo(() => {
-    const xs = points.map(p => p.x);
-    const ys = points.map(p => p.y);
+    const xs = points.map((p) => p.x);
+    const ys = points.map((p) => p.y);
     return fitPolyCoeffs(xs, ys, degree);
   }, [points, degree]);
 
-  const fittedFn = useMemo(() => coeffsToFn(coeffs), [coeffs]);
+  const fittedFn       = useMemo(() => coeffsToFn(coeffs), [coeffs]);
   const equationPretty = useMemo(() => coeffsToPretty(coeffs, 4), [coeffs]);
+
+  // ✅ 곡선 리마운트용 키 (coeffs가 바뀔 때마다 변경)
+  const curveKey = useMemo(
+    () => coeffs.map((c) => c.toFixed(6)).join("|"),
+    [coeffs]
+  );
 
   // 수식 적용(포인트 재배치 → 자동으로 재피팅)
   function applyTypedEquation() {
@@ -146,7 +146,7 @@ export default function Studio() {
       return;
     }
     const scope = { x: 0 };
-    setPoints(prev =>
+    setPoints((prev) =>
       prev.map((p, i) => {
         scope.x = p.x;
         const y = Number(compiled.evaluate(scope));
@@ -164,9 +164,11 @@ export default function Studio() {
   }, [xmin, xmax]);
 
   // 캔버스에서 점 이동 콜백
-  function updatePoint(idx, xy) {
-    setPoints(prev => prev.map((p, i) => (i === idx ? { ...p, ...xy } : p)));
-  }
+function updatePoint(idx, xy) {
+  console.log("[Studio] setPoints", idx, xy); // 디버그
+  setPoints((prev) => prev.map((p, i) => (i === idx ? { ...p, ...xy } : p)));
+}
+
 
   return (
     <div className="studio-root">
@@ -188,6 +190,7 @@ export default function Studio() {
         xmin={xmin}
         xmax={xmax}
         fn={fittedFn}
+        curveKey={curveKey}
       />
     </div>
   );
