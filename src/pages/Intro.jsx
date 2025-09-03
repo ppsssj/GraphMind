@@ -73,7 +73,7 @@ export default function Intro() {
               Realize your mathematical imagination in{" "}
               <span className="accent-strong">real-time 3D</span>.
             </p>
-            <button className="cta" onClick={() => nav("/studio")}>
+            <button className="cta" onClick={() => nav("/vault")}>
               Start
             </button>
           </div>
@@ -200,7 +200,7 @@ export default function Intro() {
             </p>
             <button
               className="cta-large"
-              onClick={() => nav("/studio")}
+              onClick={() => nav("/vault")}
               aria-label="그래프를 그리다 페이지로 이동"
             >
               Draw Now Graphs

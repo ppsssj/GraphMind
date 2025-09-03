@@ -1,0 +1,42 @@
+export const dummyEquations = [
+  {
+    id: "eq1",
+    title: "Quadratic Curve",
+    formula: "y = x^2 + 3x - 4",
+    tags: ["polynomial", "quadratic"],
+    links: ["eq3"],
+    updatedAt: "2025-08-30T12:00:00Z",
+  },
+  {
+    id: "eq2",
+    title: "Sine Wave",
+    formula: "y = sin(x)",
+    tags: ["trig", "periodic"],
+    links: [],
+    updatedAt: "2025-08-31T09:20:00Z",
+  },
+  {
+    id: "eq3",
+    title: "Cubic",
+    formula: "y = 0.5x^3 - 2x",
+    tags: ["polynomial", "cubic"],
+    links: ["eq1"],
+    updatedAt: "2025-09-01T18:45:00Z",
+  },
+  {
+    id: "eq4",
+    title: "Exponential",
+    formula: "y = e^{0.3x}",
+    tags: ["exp", "growth"],
+    links: [],
+    updatedAt: "2025-09-02T15:10:00Z",
+  },
+  {
+    id: "eq5",
+    title: "Gaussian",
+    formula: "y = exp(-x^2)",
+    tags: ["gaussian", "probability"],
+    links: [],
+    updatedAt: "2025-09-03T03:12:00Z",
+  },
+];
