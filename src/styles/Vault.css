@@ -58,32 +58,3 @@
   inset: 56px 0 0 0;
   min-height: 400px;
 }
-
-.legend {
-  position: absolute;
-  right: 16px;
-  top: 72px;
-  background: rgba(20, 24, 33, 0.8);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 10px 12px;
-  font-size: 12px;
-}
-.legend .row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-.legend .dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  display: inline-block;
-}
-.legend .note {
-  background: var(--accent);
-}
-.legend .tag {
-  background: var(--accent-2);
-}

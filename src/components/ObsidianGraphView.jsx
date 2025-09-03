@@ -6,7 +6,7 @@ import React, {
   useState,
 } from "react";
 import ForceGraph2D from "react-force-graph-2d";
-import "../styles/ObsidianGraphView.css"; // ⬅️ 새 CSS 임포트
+import "../styles/ObsidianGraphView.css";
 
 export default function ObsidianGraphView({
   notes = [],
@@ -64,7 +64,7 @@ export default function ObsidianGraphView({
   const [graph, setGraph] = useState({ nodes: [], links: [] }); // 현재 화면에 보이는 그래프
   const [isPlaying, setIsPlaying] = useState(false);
   const [cursor, setCursor] = useState(0); // 타임라인에서 현재 스텝
-  const [speed, setSpeed] = useState(1);   // 0.5x~4x 등 배속
+  const [speed, setSpeed] = useState(1); // 0.5x~4x 등 배속
   const [showControls, setShowControls] = useState(false); // 타임랩스 컨트롤 표시 여부
 
   // notes의 updatedAt을 기반으로 "생성 이벤트" 타임라인 구성
@@ -144,8 +144,7 @@ export default function ObsidianGraphView({
         } else {
           const exists = prev.links.some(
             (l) =>
-              String(l.source?.id || l.source) ===
-                String(step.link.source) &&
+              String(l.source?.id || l.source) === String(step.link.source) &&
               String(l.target?.id || l.target) === String(step.link.target)
           );
           if (exists) return prev;
@@ -153,7 +152,7 @@ export default function ObsidianGraphView({
         }
       });
       setCursor((c) => c + 1);
-      fgRef.current?.refresh();
+      fgRef.current?.d3ReheatSimulation?.();
     }, nextDelay);
 
     return () => clearTimeout(to);
@@ -161,8 +160,8 @@ export default function ObsidianGraphView({
 
   // 타임랩스가 아닐 땐 항상 전체 그래프 보여주기
   useEffect(() => {
-    if (!isPlaying) setGraph(fullGraph);
-  }, [fullGraph, isPlaying]);
+    if (!isPlaying && cursor === 0) setGraph(fullGraph);
+  }, [fullGraph, isPlaying, cursor]);
 
   // 활성 노드로 카메라 이동 (해당 노드가 "보일 때"까지 기다림)
   useEffect(() => {
@@ -187,11 +186,10 @@ export default function ObsidianGraphView({
 
   // 타임랩스 컨트롤 핸들러
   const startTimelapse = () => {
-    setIsPlaying(false);
-    setGraph({ nodes: [], links: [] });
+    // 먼저 재생 ON → "재생 아님이면 풀그래프" 효과가 작동하지 않게 함
+    setIsPlaying(true);
     setCursor(0);
-    // 약간의 딜레이 후 시작하면 초기 렌더 안정적
-    setTimeout(() => setIsPlaying(true), 0);
+    setGraph({ nodes: [], links: [] });
   };
   const pauseTimelapse = () => setIsPlaying(false);
   const resumeTimelapse = () => {
@@ -202,13 +200,13 @@ export default function ObsidianGraphView({
     setIsPlaying(false);
     setGraph({ nodes: [], links: [] });
     setCursor(0);
-    fgRef.current?.refresh();
+    fgRef.current?.d3ReheatSimulation?.();
   };
   const showAll = () => {
     setIsPlaying(false);
     setGraph(fullGraph);
     setCursor(total);
-    fgRef.current?.refresh();
+    fgRef.current?.d3ReheatSimulation?.();
   };
 
   const currentTs = timeline[Math.min(cursor - 1, total - 1)]?.t;
@@ -261,11 +259,28 @@ export default function ObsidianGraphView({
       )}
 
       {/* 타임랩스 컨트롤 */}
-  <div className="timelapse-controls" style={{ position: "absolute", left: 20, bottom: 20, zIndex: 20, minWidth: 0 }}>
+      <div
+        className="timelapse-controls"
+        style={{
+          position: "absolute",
+          left: 20,
+          bottom: 20,
+          zIndex: 20,
+          minWidth: 0,
+        }}
+      >
         {!showControls ? (
           <button
             className="tl-toggle-btn fade-in-right"
-            style={{ background: "none", border: "none", cursor: "pointer", padding: 8, fontSize: 22, color: "#60a5fa", transition: "all 0.4s" }}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              padding: 8,
+              fontSize: 22,
+              color: "#60a5fa",
+              transition: "all 0.4s",
+            }}
             onClick={() => setShowControls(true)}
             aria-label="Show timelapse controls"
           >
@@ -277,31 +292,78 @@ export default function ObsidianGraphView({
             </svg>
           </button>
         ) : (
-          <div className="tl-controls-panel fade-in-left" style={{ minWidth: 240, maxWidth: 340, background: "#181a20ee", borderRadius: 12, boxShadow: "0 2px 16px #0006", padding: 14, transition: "all 0.4s", width: "100%" }}>
+          <div
+            className="tl-controls-panel fade-in-left"
+            style={{
+              minWidth: 340,
+              maxWidth: 480,
+              background: "#181a20ee",
+              borderRadius: 12,
+              boxShadow: "0 2px 16px #0006",
+              padding: 18,
+              transition: "all 0.4s",
+              width: "100%",
+            }}
+          >
             <button
               className="tl-close-btn"
-              style={{ position: "absolute", top: 12, right: 12, background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#9aa4b2" }}
+              style={{
+                position: "absolute",
+                top: 12,
+                right: 12,
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                fontSize: 18,
+                color: "#9aa4b2",
+              }}
               onClick={() => setShowControls(false)}
               aria-label="Close timelapse controls"
             >
               {/* X 아이콘 */}
               <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                <line x1="5" y1="5" x2="15" y2="15" stroke="#9aa4b2" strokeWidth="2" strokeLinecap="round" />
-                <line x1="15" y1="5" x2="5" y2="15" stroke="#9aa4b2" strokeWidth="2" strokeLinecap="round" />
+                <line
+                  x1="5"
+                  y1="5"
+                  x2="15"
+                  y2="15"
+                  stroke="#9aa4b2"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
+                <line
+                  x1="15"
+                  y1="5"
+                  x2="5"
+                  y2="15"
+                  stroke="#9aa4b2"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
               </svg>
             </button>
             <div className="tl-row">
               {!isPlaying && cursor === 0 && (
-                <button className="tl-btn" onClick={startTimelapse}>▶ Play</button>
+                <button className="tl-btn" onClick={startTimelapse}>
+                  ▶ Play
+                </button>
               )}
               {isPlaying && (
-                <button className="tl-btn" onClick={pauseTimelapse}>⏸ Pause</button>
+                <button className="tl-btn" onClick={pauseTimelapse}>
+                  ⏸ Pause
+                </button>
               )}
               {!isPlaying && cursor > 0 && cursor < total && (
-                <button className="tl-btn" onClick={resumeTimelapse}>▶ Resume</button>
+                <button className="tl-btn" onClick={resumeTimelapse}>
+                  ▶ Resume
+                </button>
               )}
-              <button className="tl-btn subtle" onClick={resetTimelapse}>⟲ Reset</button>
-              <button className="tl-btn subtle" onClick={showAll}>▣ Show All</button>
+              <button className="tl-btn subtle" onClick={resetTimelapse}>
+                ⟲ Reset
+              </button>
+              <button className="tl-btn subtle" onClick={showAll}>
+                ▣ Show All
+              </button>
 
               <div className="tl-sep" />
               <label className="tl-speed">
@@ -326,7 +388,9 @@ export default function ObsidianGraphView({
                 />
               </div>
               <div className="tl-stats">
-                <span>{cursor}/{total}</span>
+                <span>
+                  {cursor}/{total}
+                </span>
                 <span className="tl-date">{currentDateLabel}</span>
               </div>
             </div>

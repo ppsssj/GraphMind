@@ -1,26 +1,53 @@
 import { useMemo, useRef, useState, useEffect } from "react";
 import { Canvas } from "@react-three/fiber";
-import { OrbitControls, TransformControls, Text } from "@react-three/drei";
+import { OrbitControls, TransformControls, Text, useCursor } from "@react-three/drei";
 import * as THREE from "three";
 
-function Axes() {
+function Axes({ xmin = -8, xmax = 8, ymin = -8, ymax = 8 }) {
   return (
     <group>
+      {/* 기본 헬퍼 (회색 격자 + xyz축) */}
       <axesHelper args={[8]} />
       <gridHelper args={[16, 16]} rotation={[Math.PI / 2, 0, 0]} />
+
+      {/* y=0 라인 (X축 방향, 보라색 굵게) */}
+      <line>
+        <bufferGeometry
+          attach="geometry"
+          attributes-position={new THREE.Float32BufferAttribute(
+            [xmin, 0, 0, xmax, 0, 0],
+            3
+          )}
+        />
+        <lineBasicMaterial color="#6039BC" linewidth={3} />
+      </line>
+
+      {/* x=0 라인 (Y축 방향, 보라색 굵게) */}
+      <line>
+        <bufferGeometry
+          attach="geometry"
+          attributes-position={new THREE.Float32BufferAttribute(
+            [0, ymin, 0, 0, ymax, 0],
+            3
+          )}
+        />
+        <lineBasicMaterial color="#6039BC" linewidth={3} />
+      </line>
     </group>
   );
 }
 
-// 곡선: 포지션 버퍼를 매번 새로 만들어 교체 (coeffs/도메인 변동 시 재계산)
-function Curve({ fn, xmin, xmax }) {
+
+// 곡선: 포지션 버퍼를 매번 새로 만들어 교체 (fn/도메인 변동 시 재계산)
+function Curve({ fn, xmin, xmax, color = "white" }) {
   const positions = useMemo(() => {
     const steps = 220;
     const dx = (xmax - xmin) / steps;
     const arr = new Float32Array((steps + 1) * 3);
     for (let i = 0; i <= steps; i++) {
       const x = xmin + dx * i;
-      const y = fn(x);
+      const yRaw = fn ? fn(x) : NaN;
+      const y = Number.isFinite(yRaw) ? yRaw : 0; // NaN이 버퍼에 들어가면 라인이 깨짐 → 0으로 대체
       const o = i * 3;
       arr[o + 0] = x;
       arr[o + 1] = y;
@@ -34,56 +61,65 @@ function Curve({ fn, xmin, xmax }) {
       <bufferGeometry>
         <bufferAttribute
           attach="attributes-position"
-          count={positions.length / 3}
           array={positions}
+          count={positions.length / 3}
           itemSize={3}
         />
       </bufferGeometry>
-      <lineBasicMaterial />
+      <lineBasicMaterial color={color} linewidth={2} />
     </line>
   );
 }
 
-function EditablePoint({
-  index,
-  position,
-  selected,
-  onSelect,
-  onChange,
-  setControlsBusy,
-}) {
-  const objRef = useRef();        // 실제로 화면에 보이는 점+라벨
-  const tcRef  = useRef();        // TransformControls
-  
-  // 상위에서 position이 바뀌면 (예: 외부 연산) 실제 오브젝트 위치를 동기화
+/* ─────────────────────────────────────────────────────────────
+   편집 방식 #1: TransformControls(화살표) 기반
+   ───────────────────────────────────────────────────────────── */
+function EditablePoint({ index, position, onChange, setControlsBusy }) {
+  const tcRef = useRef();
+  const sphereRef = useRef();
+
+  // 초기 위치 적용
   useEffect(() => {
-    if (!objRef.current) return;
-    objRef.current.position.set(position.x, position.y, 0);
+    if (tcRef.current?.object) {
+      tcRef.current.object.position.set(position.x, position.y, 0);
+    }
   }, [position.x, position.y]);
 
-  // 드래그 중 매 프레임 좌표 반영 (controls.object가 '현재 드래그 중인 대상')
-  const handleChange = () => {
-    const t = tcRef.current;
-    const o = t?.object;
-    if (!o) return;
-    if (o.position.z !== 0) o.position.z = 0;
-    onChange(index, { x: o.position.x, y: o.position.y });
-  };
+  // TransformControls 이벤트 → 상위 상태 갱신
+  useEffect(() => {
+    const tc = tcRef.current;
+    if (!tc) return;
 
-  const CorePoint = (
-    <group
-      ref={objRef}
-      position={[position.x, position.y, 0]}
-      onClick={(e) => {
-        e.stopPropagation();
-        onSelect(index);
-      }}
-    >
-      <mesh>
-        <sphereGeometry args={[0.07, 24, 24]} />
-        <meshStandardMaterial color={selected ? "#ffd54f" : "white"} />
-      </mesh>
-      <group position={[0.14, 0.12, 0]}>
+    const handleChange = () => {
+      const obj = tc.object;
+      if (!obj) return;
+      const nx = obj.position.x;
+      const ny = obj.position.y;
+      onChange(index, { x: nx, y: ny });
+    };
+
+    const startStop = (dragging) => setControlsBusy(!!dragging);
+
+    tc.addEventListener("change", handleChange);
+    tc.addEventListener("dragging-changed", (e) => startStop(e.value));
+
+    return () => {
+      tc.removeEventListener("change", handleChange);
+      tc.removeEventListener("dragging-changed", (e) => startStop(e.value));
+    };
+  }, [index, onChange, setControlsBusy]);
+
+  return (
+    <group>
+      <TransformControls ref={tcRef} mode="translate" showX showY showZ={false}>
+        <mesh ref={sphereRef}>
+          <sphereGeometry args={[0.06, 24, 24]} />
+          <meshStandardMaterial color="#ffc107" />
+        </mesh>
+      </TransformControls>
+
+      {/* 좌표 라벨 */}
+      <group position={[position.x + 0.08, position.y + 0.08, 0]}>
         <Text
           fontSize={0.16}
           anchorX="left"
@@ -96,97 +132,273 @@ function EditablePoint({
       </group>
     </group>
   );
-
-  return selected ? (
-    <TransformControls
-      ref={tcRef}
-      mode="translate"
-      showX
-      showY
-      showZ={false}
-      onChange={handleChange} // ✅ 드래그 중 연속 업데이트
-      onDraggingChanged={(dragging) => {
-        setControlsBusy(!!dragging);
-        // 디버그: 실제 드래그 대상 좌표와 상태 좌표 둘 다 확인
-        const o = tcRef.current?.object;
-        if (dragging) {
-          console.log(`[start] P${index}`, "raw:", o?.position, "state:", position);
-        } else {
-          console.log(`[end]   P${index}`, "raw:", o?.position);
-        }
-      }}
-    >
-      {CorePoint}
-    </TransformControls>
-  ) : (
-    CorePoint
-  );
 }
 
+/* ─────────────────────────────────────────────────────────────
+   편집 방식 #2: 점 자체 드래그(TransformControls 없이)
+   ───────────────────────────────────────────────────────────── */
+function DraggablePoint({ index, position, xmin, xmax, onChange, setControlsBusy }) {
+  const plane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), []);
+  const hit = useRef(new THREE.Vector3());
+  const [hovered, setHovered] = useState(false);
+  const [dragging, setDragging] = useState(false);
+
+  useCursor(hovered || dragging);
+
+  const onPointerDown = (e) => {
+    e.stopPropagation();
+    setDragging(true);
+    setControlsBusy(true);
+    e.target.setPointerCapture?.(e.pointerId);
+  };
+
+  const onPointerMove = (e) => {
+    if (!dragging) return;
+    e.stopPropagation();
+    if (e.ray.intersectPlane(plane, hit.current)) {
+      let x = hit.current.x;
+      let y = hit.current.y;
+      // X를 도메인 안으로 제한(원하면 제거 가능)
+      if (Number.isFinite(xmin) && Number.isFinite(xmax)) {
+        x = Math.max(xmin, Math.min(xmax, x));
+      }
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        onChange(index, { x, y });
+      }
+    }
+  };
+
+  const endDrag = (e) => {
+    e.stopPropagation();
+    setDragging(false);
+    setControlsBusy(false);
+    e.target.releasePointerCapture?.(e.pointerId);
+  };
+
+  return (
+    <group>
+      <mesh
+        position={[position.x, position.y, 0]}
+        onPointerOver={(e) => { e.stopPropagation(); setHovered(true); }}
+        onPointerOut={(e) => { e.stopPropagation(); setHovered(false); }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+      >
+        <sphereGeometry args={[0.06, 24, 24]} />
+        <meshStandardMaterial
+          color={dragging ? "#ff9800" : hovered ? "#ffd54f" : "#ffc107"}
+          emissive={dragging ? "#ff9800" : "#000000"}
+          emissiveIntensity={dragging ? 0.25 : 0}
+        />
+      </mesh>
+
+      {/* 좌표 라벨 */}
+      <group position={[position.x + 0.08, position.y + 0.08, 0]}>
+        <Text
+          fontSize={0.16}
+          anchorX="left"
+          anchorY="bottom"
+          outlineWidth={0.004}
+          outlineColor="black"
+        >
+          {`(${position.x.toFixed(2)}, ${position.y.toFixed(2)})`}
+        </Text>
+      </group>
+    </group>
+  );
+}
 
 export default function GraphCanvas({
   points,
   onPointChange,
   xmin,
   xmax,
-  fn,
-  curveKey, // coeffs 변화에 따라 곡선 리마운트
+  fn,        // 파랑: 다항 근사
+  typedFn,   // 빨강: 입력 수식
+  curveKey,  // 리마운트 키
 }) {
+  const wrapperRef = useRef(null);
   const [controlsBusy, setControlsBusy] = useState(false);
-  const [selectedIndex, setSelectedIndex] = useState(null);
+
+  // 보기 모드: "typed" | "fit" | "both"
+  const [viewMode, setViewMode] = useState("both");
+  const showTyped = typedFn && (viewMode === "typed" || viewMode === "both");
+  const showFit   = fn && (viewMode === "fit" || viewMode === "both");
+
+  // 편집 모드: "arrows"(TransformControls) | "drag"(mesh 직접 드래그)
+  const [editMode, setEditMode] = useState("drag");
 
   return (
-    <div className="canvas-wrap" style={{ position: "relative" }}>
-      {selectedIndex !== null && (
-        <div
-          style={{
-            position: "absolute",
-            left: 12,
-            top: 12,
-            zIndex: 10,
-            background: "rgba(0,0,0,0.55)",
-            color: "white",
-            padding: "6px 8px",
-            borderRadius: 8,
-            fontSize: 12,
-            pointerEvents: "none",
-            userSelect: "none",
-          }}
-        >
-          P{selectedIndex}: ({points[selectedIndex].x.toFixed(3)},{" "}
-          {points[selectedIndex].y.toFixed(3)})
-        </div>
-      )}
-
+    <div ref={wrapperRef} style={{ position: "relative", flex: 1 }}>
       <Canvas
-        camera={{ position: [0, 0, 12], fov: 50 }}
-        onPointerMissed={() => setSelectedIndex(null)}
+        orthographic
+        camera={{ zoom: 80, position: [0, 0, 10] }}
+        onCreated={({ gl }) => {
+          gl.setClearColor(new THREE.Color("#0f1115"), 1.0);
+        }}
       >
         <ambientLight intensity={0.7} />
-        <directionalLight position={[5, 8, 10]} intensity={0.6} />
+        <directionalLight position={[3, 5, 6]} intensity={0.9} />
 
         <Axes />
-        {/* coeffs가 바뀔 때 Curve 리마운트(안전장치) */}
-        <Curve key={curveKey} fn={fn} xmin={xmin} xmax={xmax} />
 
-        {points.map((p, i) => (
-          <EditablePoint
-            key={p.id}
-            index={i}
-            position={{ x: p.x, y: p.y }}
-            selected={i === selectedIndex}
-            onSelect={setSelectedIndex}
-            onChange={(idx, xy) => {
-              // 상위 state 업데이트 + 디버그
-              console.log("onPointChange", { idx, ...xy });
-              onPointChange(idx, xy);
-            }}
-            setControlsBusy={setControlsBusy}
-          />
-        ))}
+        {/* 곡선들 */}
+        {showFit && (
+          <Curve key={curveKey + "|fit"} fn={fn} xmin={xmin} xmax={xmax} color="#64b5f6" />
+        )}
+        {showTyped && (
+          <Curve key={curveKey + "|typed"} fn={typedFn} xmin={xmin} xmax={xmax} color="#ff5252" />
+        )}
+
+        {/* 포인트들: 편집 모드에 따라 컴포넌트 분기 */}
+        {points.map((p, i) =>
+          editMode === "arrows" ? (
+            <EditablePoint
+              key={"e-" + (p.id ?? i)}
+              index={i}
+              position={{ x: p.x, y: p.y }}
+              onChange={(idx, xy) => onPointChange(idx, xy)}
+              setControlsBusy={setControlsBusy}
+            />
+          ) : (
+            <DraggablePoint
+              key={"d-" + (p.id ?? i)}
+              index={i}
+              position={{ x: p.x, y: p.y }}
+              xmin={xmin}
+              xmax={xmax}
+              onChange={(idx, xy) => onPointChange(idx, xy)}
+              setControlsBusy={setControlsBusy}
+            />
+          )
+        )}
 
         <OrbitControls makeDefault enabled={!controlsBusy} />
       </Canvas>
+
+      {/* ── 우상단: 보기 토글 + 편집 모드 토글 + 범례 */}
+      <div
+        style={{
+          position: "absolute",
+          right: 12,
+          top: 12,
+          display: "flex",
+          gap: 8,
+          alignItems: "stretch",
+        }}
+      >
+        {/* 보기 */}
+        <div
+          style={{
+            background: "rgba(0,0,0,0.55)",
+            color: "#fff",
+            padding: "6px 8px",
+            borderRadius: 8,
+            fontSize: 12,
+            lineHeight: 1.2,
+          }}
+        >
+          <div style={{ marginBottom: 6, opacity: 0.9 }}>보기</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              onClick={() => setViewMode("typed")}
+              style={{
+                padding: "4px 6px",
+                borderRadius: 6,
+                border: "1px solid rgba(255,255,255,0.25)",
+                background: viewMode === "typed" ? "#ff5252" : "transparent",
+                color: viewMode === "typed" ? "#000" : "#fff",
+                cursor: "pointer",
+              }}
+              title="입력 수식만"
+            >
+              수식만
+            </button>
+            <button
+              onClick={() => setViewMode("fit")}
+              style={{
+                padding: "4px 6px",
+                borderRadius: 6,
+                border: "1px solid rgba(255,255,255,0.25)",
+                background: viewMode === "fit" ? "#64b5f6" : "transparent",
+                color: viewMode === "fit" ? "#000" : "#fff",
+                cursor: "pointer",
+              }}
+              title="다항식 근사만"
+            >
+              근사만
+            </button>
+            <button
+              onClick={() => setViewMode("both")}
+              style={{
+                padding: "4px 6px",
+                borderRadius: 6,
+                border: "1px solid rgba(255,255,255,0.25)",
+                background: viewMode === "both" ? "#fff" : "transparent",
+                color: viewMode === "both" ? "#000" : "#fff",
+                cursor: "pointer",
+              }}
+              title="둘 다 보기"
+            >
+              둘다
+            </button>
+          </div>
+
+          {/* 범례 */}
+          <div style={{ marginTop: 8, opacity: 0.9 }}>
+            <div><span style={{ color: "#ff5252" }}>■</span> 입력 수식</div>
+            <div><span style={{ color: "#64b5f6" }}>■</span> 다항 근사</div>
+          </div>
+        </div>
+
+        {/* 편집 */}
+        <div
+          style={{
+            background: "rgba(0,0,0,0.55)",
+            color: "#fff",
+            padding: "6px 8px",
+            borderRadius: 8,
+            fontSize: 12,
+            lineHeight: 1.2,
+          }}
+        >
+          <div style={{ marginBottom: 6, opacity: 0.9 }}>편집</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              onClick={() => setEditMode("arrows")}
+              style={{
+                padding: "4px 6px",
+                borderRadius: 6,
+                border: "1px solid rgba(255,255,255,0.25)",
+                background: editMode === "arrows" ? "#fff" : "transparent",
+                color: editMode === "arrows" ? "#000" : "#fff",
+                cursor: "pointer",
+              }}
+              title="화살표(TransformControls)로 이동"
+            >
+              화살표
+            </button>
+            <button
+              onClick={() => setEditMode("drag")}
+              style={{
+                padding: "4px 6px",
+                borderRadius: 6,
+                border: "1px solid rgba(255,255,255,0.25)",
+                background: editMode === "drag" ? "#fff" : "transparent",
+                color: editMode === "drag" ? "#000" : "#fff",
+                cursor: "pointer",
+              }}
+              title="점 직접 드래그로 이동"
+            >
+              드래그
+            </button>
+          </div>
+          <div style={{ marginTop: 6, opacity: 0.8 }}>
+            {editMode === "drag" ? "점 클릭 후 드래그" : "노란점의 화살표로 이동"}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
