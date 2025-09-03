@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-
+import "../styles/EquationList.css";
 export default function EquationList({
   items,
   activeId,
