@@ -6,30 +6,21 @@ import * as THREE from "three";
 function Axes({ xmin = -8, xmax = 8, ymin = -8, ymax = 8 }) {
   return (
     <group>
-      {/* 기본 헬퍼 (회색 격자 + xyz축) */}
       <axesHelper args={[8]} />
       <gridHelper args={[16, 16]} rotation={[Math.PI / 2, 0, 0]} />
-
-      {/* y=0 라인 (X축 방향, 보라색 굵게) */}
+      {/* y=0 */}
       <line>
         <bufferGeometry
           attach="geometry"
-          attributes-position={new THREE.Float32BufferAttribute(
-            [xmin, 0, 0, xmax, 0, 0],
-            3
-          )}
+          attributes-position={new THREE.Float32BufferAttribute([xmin, 0, 0, xmax, 0, 0], 3)}
         />
         <lineBasicMaterial color="#6039BC" linewidth={3} />
       </line>
-
-      {/* x=0 라인 (Y축 방향, 보라색 굵게) */}
+      {/* x=0 */}
       <line>
         <bufferGeometry
           attach="geometry"
-          attributes-position={new THREE.Float32BufferAttribute(
-            [0, ymin, 0, 0, ymax, 0],
-            3
-          )}
+          attributes-position={new THREE.Float32BufferAttribute([0, ymin, 0, 0, ymax, 0], 3)}
         />
         <lineBasicMaterial color="#6039BC" linewidth={3} />
       </line>
@@ -37,8 +28,6 @@ function Axes({ xmin = -8, xmax = 8, ymin = -8, ymax = 8 }) {
   );
 }
 
-
-// 곡선: 포지션 버퍼를 매번 새로 만들어 교체 (fn/도메인 변동 시 재계산)
 function Curve({ fn, xmin, xmax, color = "white" }) {
   const positions = useMemo(() => {
     const steps = 220;
@@ -47,7 +36,7 @@ function Curve({ fn, xmin, xmax, color = "white" }) {
     for (let i = 0; i <= steps; i++) {
       const x = xmin + dx * i;
       const yRaw = fn ? fn(x) : NaN;
-      const y = Number.isFinite(yRaw) ? yRaw : 0; // NaN이 버퍼에 들어가면 라인이 깨짐 → 0으로 대체
+      const y = Number.isFinite(yRaw) ? yRaw : 0;
       const o = i * 3;
       arr[o + 0] = x;
       arr[o + 1] = y;
@@ -59,33 +48,23 @@ function Curve({ fn, xmin, xmax, color = "white" }) {
   return (
     <line>
       <bufferGeometry>
-        <bufferAttribute
-          attach="attributes-position"
-          array={positions}
-          count={positions.length / 3}
-          itemSize={3}
-        />
+        <bufferAttribute attach="attributes-position" array={positions} count={positions.length / 3} itemSize={3} />
       </bufferGeometry>
       <lineBasicMaterial color={color} linewidth={2} />
     </line>
   );
 }
 
-/* ─────────────────────────────────────────────────────────────
-   편집 방식 #1: TransformControls(화살표) 기반
-   ───────────────────────────────────────────────────────────── */
+/* TransformControls(화살표) */
 function EditablePoint({ index, position, onChange, setControlsBusy }) {
   const tcRef = useRef();
-  const sphereRef = useRef();
 
-  // 초기 위치 적용
   useEffect(() => {
     if (tcRef.current?.object) {
       tcRef.current.object.position.set(position.x, position.y, 0);
     }
   }, [position.x, position.y]);
 
-  // TransformControls 이벤트 → 상위 상태 갱신
   useEffect(() => {
     const tc = tcRef.current;
     if (!tc) return;
@@ -93,16 +72,12 @@ function EditablePoint({ index, position, onChange, setControlsBusy }) {
     const handleChange = () => {
       const obj = tc.object;
       if (!obj) return;
-      const nx = obj.position.x;
-      const ny = obj.position.y;
-      onChange(index, { x: nx, y: ny });
+      onChange(index, { x: obj.position.x, y: obj.position.y });
     };
-
     const startStop = (dragging) => setControlsBusy(!!dragging);
 
     tc.addEventListener("change", handleChange);
     tc.addEventListener("dragging-changed", (e) => startStop(e.value));
-
     return () => {
       tc.removeEventListener("change", handleChange);
       tc.removeEventListener("dragging-changed", (e) => startStop(e.value));
@@ -112,21 +87,13 @@ function EditablePoint({ index, position, onChange, setControlsBusy }) {
   return (
     <group>
       <TransformControls ref={tcRef} mode="translate" showX showY showZ={false}>
-        <mesh ref={sphereRef}>
+        <mesh>
           <sphereGeometry args={[0.06, 24, 24]} />
           <meshStandardMaterial color="#ffc107" />
         </mesh>
       </TransformControls>
-
-      {/* 좌표 라벨 */}
       <group position={[position.x + 0.08, position.y + 0.08, 0]}>
-        <Text
-          fontSize={0.16}
-          anchorX="left"
-          anchorY="bottom"
-          outlineWidth={0.004}
-          outlineColor="black"
-        >
+        <Text fontSize={0.16} anchorX="left" anchorY="bottom" outlineWidth={0.004} outlineColor="black">
           {`(${position.x.toFixed(2)}, ${position.y.toFixed(2)})`}
         </Text>
       </group>
@@ -134,9 +101,7 @@ function EditablePoint({ index, position, onChange, setControlsBusy }) {
   );
 }
 
-/* ─────────────────────────────────────────────────────────────
-   편집 방식 #2: 점 자체 드래그(TransformControls 없이)
-   ───────────────────────────────────────────────────────────── */
+/* 점 직접 드래그 */
 function DraggablePoint({ index, position, xmin, xmax, onChange, setControlsBusy }) {
   const plane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), []);
   const hit = useRef(new THREE.Vector3());
@@ -158,7 +123,6 @@ function DraggablePoint({ index, position, xmin, xmax, onChange, setControlsBusy
     if (e.ray.intersectPlane(plane, hit.current)) {
       let x = hit.current.x;
       let y = hit.current.y;
-      // X를 도메인 안으로 제한(원하면 제거 가능)
       if (Number.isFinite(xmin) && Number.isFinite(xmax)) {
         x = Math.max(xmin, Math.min(xmax, x));
       }
@@ -193,15 +157,8 @@ function DraggablePoint({ index, position, xmin, xmax, onChange, setControlsBusy
         />
       </mesh>
 
-      {/* 좌표 라벨 */}
       <group position={[position.x + 0.08, position.y + 0.08, 0]}>
-        <Text
-          fontSize={0.16}
-          anchorX="left"
-          anchorY="bottom"
-          outlineWidth={0.004}
-          outlineColor="black"
-        >
+        <Text fontSize={0.16} anchorX="left" anchorY="bottom" outlineWidth={0.004} outlineColor="black">
           {`(${position.x.toFixed(2)}, ${position.y.toFixed(2)})`}
         </Text>
       </group>
@@ -214,26 +171,34 @@ export default function GraphCanvas({
   onPointChange,
   xmin,
   xmax,
-  fn,        // 파랑: 다항 근사
-  typedFn,   // 빨강: 입력 수식
-  curveKey,  // 리마운트 키
+  fn,       // 파랑: 다항 근사
+  typedFn,  // 빨강: 입력 수식
+  curveKey, // 리마운트 키
 }) {
   const wrapperRef = useRef(null);
   const [controlsBusy, setControlsBusy] = useState(false);
 
-  // 보기 모드: "typed" | "fit" | "both"
-  const [viewMode, setViewMode] = useState("both");
+  const [viewMode, setViewMode] = useState("both"); // "typed" | "fit" | "both"
   const showTyped = typedFn && (viewMode === "typed" || viewMode === "both");
   const showFit   = fn && (viewMode === "fit" || viewMode === "both");
 
-  // 편집 모드: "arrows"(TransformControls) | "drag"(mesh 직접 드래그)
-  const [editMode, setEditMode] = useState("drag");
+  const [editMode, setEditMode] = useState("drag"); // "arrows" | "drag"
 
   return (
-    <div ref={wrapperRef} style={{ position: "relative", flex: 1 }}>
+    <div
+      ref={wrapperRef}
+      style={{
+        position: "relative",
+        flex: 1,           // pane-content의 남은 공간을 채움
+        width: "100%",
+        height: "100%",
+        overflow: "hidden",
+      }}
+    >
       <Canvas
         orthographic
         camera={{ zoom: 80, position: [0, 0, 10] }}
+        style={{ width: "100%", height: "100%" }} 
         onCreated={({ gl }) => {
           gl.setClearColor(new THREE.Color("#0f1115"), 1.0);
         }}
@@ -243,15 +208,9 @@ export default function GraphCanvas({
 
         <Axes />
 
-        {/* 곡선들 */}
-        {showFit && (
-          <Curve key={curveKey + "|fit"} fn={fn} xmin={xmin} xmax={xmax} color="#64b5f6" />
-        )}
-        {showTyped && (
-          <Curve key={curveKey + "|typed"} fn={typedFn} xmin={xmin} xmax={xmax} color="#ff5252" />
-        )}
+        {showFit && <Curve key={curveKey + "|fit"} fn={fn} xmin={xmin} xmax={xmax} color="#64b5f6" />}
+        {showTyped && <Curve key={curveKey + "|typed"} fn={typedFn} xmin={xmin} xmax={xmax} color="#ff5252" />}
 
-        {/* 포인트들: 편집 모드에 따라 컴포넌트 분기 */}
         {points.map((p, i) =>
           editMode === "arrows" ? (
             <EditablePoint
@@ -277,15 +236,19 @@ export default function GraphCanvas({
         <OrbitControls makeDefault enabled={!controlsBusy} />
       </Canvas>
 
-      {/* ── 우상단: 보기 토글 + 편집 모드 토글 + 범례 */}
+      {/* 우상단 오버레이: 반응형(줄바꿈/축소) */}
       <div
         style={{
           position: "absolute",
-          right: 12,
-          top: 12,
+          right: 8,
+          top: 8,
           display: "flex",
+          flexWrap: "wrap",
           gap: 8,
-          alignItems: "stretch",
+          alignItems: "flex-start",
+          maxWidth: "calc(100% - 16px)",
+          boxSizing: "border-box",
+          overflow: "hidden",
         }}
       >
         {/* 보기 */}
@@ -293,10 +256,12 @@ export default function GraphCanvas({
           style={{
             background: "rgba(0,0,0,0.55)",
             color: "#fff",
-            padding: "6px 8px",
+            padding: "4px 6px",
             borderRadius: 8,
-            fontSize: 12,
+            fontSize: 11,
             lineHeight: 1.2,
+            flex: "1 1 auto",
+            minWidth: "120px",
           }}
         >
           <div style={{ marginBottom: 6, opacity: 0.9 }}>보기</div>
@@ -345,7 +310,6 @@ export default function GraphCanvas({
             </button>
           </div>
 
-          {/* 범례 */}
           <div style={{ marginTop: 8, opacity: 0.9 }}>
             <div><span style={{ color: "#ff5252" }}>■</span> 입력 수식</div>
             <div><span style={{ color: "#64b5f6" }}>■</span> 다항 근사</div>
@@ -357,10 +321,12 @@ export default function GraphCanvas({
           style={{
             background: "rgba(0,0,0,0.55)",
             color: "#fff",
-            padding: "6px 8px",
+            padding: "4px 6px",
             borderRadius: 8,
-            fontSize: 12,
+            fontSize: 11,
             lineHeight: 1.2,
+            flex: "1 1 auto",
+            minWidth: "120px",
           }}
         >
           <div style={{ marginBottom: 6, opacity: 0.9 }}>편집</div>

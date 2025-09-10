@@ -5,6 +5,7 @@ import { create, all } from "mathjs";
 import LeftPanel from "../ui/LeftPanel";
 import Toolbar from "../ui/Toolbar";
 import GraphView from "../ui/GraphView";
+import { dummyEquations } from "../data/dummyEquations";
 import "../styles/Studio.css";
 
 const math = create(all, {});
@@ -15,6 +16,15 @@ const titleFromFormula = (f) => {
   const core = (f || "").replace(/\s+/g, "");
   return "y=" + (core.length > 24 ? core.slice(0, 24) + "…" : core);
 };
+
+function normalizeFormula(raw) {
+  if (!raw) return "x";
+  let s = String(raw).trim();
+  s = s.replace(/^y\s*=\s*/i, "");
+  s = s.replace(/e\s*\^\s*\{([^}]+)\}/gi, "exp($1)");
+  s = s.replace(/(\d)(x)/gi, "$1*$2");
+  return s;
+}
 
 function exprToFn(raw) {
   const rhs = raw?.includes("=") ? raw.split("=").pop() : raw;
@@ -56,21 +66,70 @@ const coeffsToFn = (coeffs) => (x) => {
   }
   return y;
 };
+
+// ── Drag preview: draw a canvas with rounded rect + title ──
+function makeDragCanvas(text) {
+  const scale = window.devicePixelRatio || 1;
+  const padX = 10;
+  const fontPx = 12;
+
+  const tmp = document.createElement("canvas");
+  const tctx = tmp.getContext("2d");
+  tctx.font = `${fontPx * scale}px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif`;
+  const tw = tctx.measureText(text).width / scale;
+
+  const w = Math.min(240, Math.max(80, Math.ceil(tw) + padX * 2));
+  const h = 28;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w * scale;
+  canvas.height = h * scale;
+  canvas.style.width = `${w}px`;
+  canvas.style.height = `${h}px`;
+
+  const ctx = canvas.getContext("2d");
+  ctx.scale(scale, scale);
+
+  const r = 6;
+  ctx.fillStyle = "#222a3b";
+  ctx.strokeStyle = "#33415c";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(r, 0);
+  ctx.lineTo(w - r, 0);
+  ctx.quadraticCurveTo(w, 0, w, r);
+  ctx.lineTo(w, h - r);
+  ctx.quadraticCurveTo(w, h, w - r, h);
+  ctx.lineTo(r, h);
+  ctx.quadraticCurveTo(0, h, 0, h - r);
+  ctx.lineTo(0, r);
+  ctx.quadraticCurveTo(0, 0, r, 0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = "#ffffff";
+  ctx.font = `${fontPx}px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif`;
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, padX, h / 2);
+
+  return canvas;
+}
+
 // ────────────────────────────────────────────────────────────
 
 export default function Studio() {
   const location = useLocation();
-  const initialFormula =
+  const initialFormula = normalizeFormula(
     typeof location.state?.formula === "string" && location.state.formula.trim()
       ? location.state.formula.trim()
-      : "0.5*x^3 - 2*x";
+      : "0.5*x^3 - 2*x"
+  );
 
-  // 탭 메타 (제목/ID)와 탭 상태(수식, 도메인, 차수, 포인트)를 분리 저장
+  // 탭 메타 및 탭별 상태
   const firstTabId = useMemo(() => uid(), []);
   const [tabs, setTabs] = useState(() => ({
-    byId: {
-      [firstTabId]: { id: firstTabId, title: titleFromFormula(initialFormula) },
-    },
+    byId: { [firstTabId]: { id: firstTabId, title: titleFromFormula(initialFormula) } },
     all: [firstTabId],
   }));
 
@@ -81,17 +140,10 @@ export default function Studio() {
   }, []);
 
   const [tabState, setTabState] = useState(() => ({
-    [firstTabId]: {
-      equation: initialFormula,
-      xmin: -3,
-      xmax: 3,
-      degree: 3,
-      points: makeInitialPoints(initialFormula),
-      ver: 0, // 그래프 리마운트용
-    },
+    [firstTabId]: { equation: initialFormula, xmin: -3, xmax: 3, degree: 3, points: makeInitialPoints(initialFormula), ver: 0 },
   }));
 
-  // VSCode처럼 두 에디터 그룹(pane) + DnD로 분할
+  // 분할/포커스/패널 구성
   const [isSplit, setIsSplit] = useState(false);
   const [focusedPane, setFocusedPane] = useState("left");
   const [panes, setPanes] = useState({
@@ -99,7 +151,7 @@ export default function Studio() {
     right: { ids: [], activeId: null },
   });
 
-  // 중앙 분할바 드래그
+  // 분할바 드래그
   const [leftPct, setLeftPct] = useState(55);
   const draggingRef = useRef(false);
   useEffect(() => {
@@ -120,17 +172,18 @@ export default function Studio() {
     };
   }, []);
 
-  // 활성 탭/상태
+  // 활성 탭
   const activeId = panes[focusedPane].activeId;
   const active = activeId ? tabState[activeId] : null;
 
-  // ── 탭 조작 ────────────────────────────────────────────────
+  // 탭 ops
   const setActive = (paneKey, id) => {
     setPanes((s) => ({ ...s, [paneKey]: { ...s[paneKey], activeId: id } }));
     setFocusedPane(paneKey);
   };
 
-  const createTab = useCallback((formula, targetPane = focusedPane) => {
+  const createTab = useCallback((rawFormula, targetPane = focusedPane) => {
+    const formula = normalizeFormula(rawFormula);
     const id = uid();
     setTabs((t) => ({
       byId: { ...t.byId, [id]: { id, title: titleFromFormula(formula) } },
@@ -138,21 +191,11 @@ export default function Studio() {
     }));
     setTabState((st) => ({
       ...st,
-      [id]: {
-        equation: formula,
-        xmin: -3,
-        xmax: 3,
-        degree: 3,
-        points: makeInitialPoints(formula),
-        ver: 0,
-      },
+      [id]: { equation: formula, xmin: -3, xmax: 3, degree: 3, points: makeInitialPoints(formula), ver: 0 },
     }));
     setPanes((p) => {
       const nextIds = [...p[targetPane].ids, id];
-      return {
-        ...p,
-        [targetPane]: { ids: nextIds, activeId: id },
-      };
+      return { ...p, [targetPane]: { ids: nextIds, activeId: id } };
     });
     setFocusedPane(targetPane);
   }, [focusedPane, makeInitialPoints]);
@@ -162,16 +205,12 @@ export default function Studio() {
       const ids = p[paneKey].ids.filter((x) => x !== id);
       let activeId = p[paneKey].activeId;
       if (activeId === id) activeId = ids[ids.length - 1] ?? null;
-
       const next = { ...p, [paneKey]: { ids, activeId } };
-      // 우측 모든 탭이 닫히면 분할 종료
       if (paneKey === "right" && ids.length === 0) {
         setIsSplit(false);
         return { ...next, right: { ids: [], activeId: null } };
       }
-      // 좌측이 비는 건 방지(최소 1개 유지)
       if (paneKey === "left" && ids.length === 0) {
-        // 좌측 비면 오른쪽 첫 탭을 좌측으로 이동
         if (p.right.ids.length) {
           const [moved] = p.right.ids;
           return {
@@ -189,7 +228,7 @@ export default function Studio() {
     setPanes((p) => {
       const fromIds = p[fromKey].ids.filter((x) => x !== tabId);
       const toIds = [...p[toKey].ids, tabId];
-      const next = {
+      return {
         left: {
           ids: fromKey === "left" ? fromIds : toIds,
           activeId:
@@ -209,25 +248,52 @@ export default function Studio() {
               : tabId,
         },
       };
-      return next;
     });
   };
 
-  // ── 탭 DnD → 오른쪽 드롭 시 분할 ─────────────────────────
-  const [dragMeta, setDragMeta] = useState(null); // { tabId, fromPane }
+  // ── DnD: 탭 드래그 → 오른쪽 드롭 시 분할 + 커스텀 드래그 이미지 ──
+  const [dragMeta, setDragMeta] = useState(null);
+  const dragPreviewRef = useRef(null);
+
   const onTabDragStart = (tabId, fromPane, e) => {
     setDragMeta({ tabId, fromPane });
     e.dataTransfer.setData("text/plain", tabId);
     e.dataTransfer.effectAllowed = "move";
+    const title = tabs.byId[tabId]?.title ?? "Untitled";
+    const img = makeDragCanvas(title);
+    img.style.position = "fixed";
+    img.style.top = "-1000px";
+    img.style.left = "-1000px";
+    document.body.appendChild(img);
+    e.dataTransfer.setDragImage(img, 12, 14);
+    dragPreviewRef.current = img;
     document.body.classList.add("dragging-tab");
   };
+
+  const clearDropHighlights = () => {
+    document.querySelectorAll(".right-drop-zone, .split-ghost-drop").forEach((el) => el.classList.remove("drop-active"));
+  };
+
   const onTabDragEnd = () => {
     setDragMeta(null);
     document.body.classList.remove("dragging-tab");
+    clearDropHighlights?.();
+    if (dragPreviewRef.current) {
+      try { document.body.removeChild(dragPreviewRef.current); } catch {}
+      dragPreviewRef.current = null;
+    }
   };
+
+  // 드롭존: 강조 + 드롭 처리
+  const onDropZoneEnter = (e) => {
+    if (!dragMeta) return;
+    e.currentTarget.classList.add("drop-active");
+  };
+  const onDropZoneLeave = (e) => e.currentTarget.classList.remove("drop-active");
   const onRightDropOver = (e) => {
     if (!dragMeta) return;
     e.preventDefault();
+    e.currentTarget.classList.add("drop-active");
   };
   const onRightDrop = (e) => {
     e.preventDefault();
@@ -238,28 +304,26 @@ export default function Studio() {
     onTabDragEnd();
   };
 
-  // ── 활성 탭의 상태 업데이트 ───────────────────────────────
-  const updateActiveState = (patch) => {
+  // 활성 탭 상태 업데이트
+  const activeUpdate = (patch) => {
     if (!activeId) return;
     setTabState((st) => ({ ...st, [activeId]: { ...st[activeId], ...patch } }));
   };
-
-  const setEquationExpr = (eq) => updateActiveState({ equation: eq });
-  const setDegree = (d) => updateActiveState({ degree: d });
-  const setXmin = (v) => updateActiveState({ xmin: v });
-  const setXmax = (v) => updateActiveState({ xmax: v });
+  const setEquationExpr = (eq) => activeUpdate({ equation: normalizeFormula(eq) });
+  const setDegree = (d) => activeUpdate({ degree: d });
+  const setXmin = (v) => activeUpdate({ xmin: v });
+  const setXmax = (v) => activeUpdate({ xmax: v });
 
   const applyEquation = () => {
     if (!active) return;
     const fn = exprToFn(active.equation);
     setTabState((st) => {
       const cur = st[activeId];
-      const newPts = cur.points.map((p, i) => ({ ...p, y: Number(fn(p.x)) || 0 }));
+      const newPts = cur.points.map((p) => ({ ...p, y: Number(fn(p.x)) || 0 }));
       return { ...st, [activeId]: { ...cur, points: newPts, ver: cur.ver + 1 } };
     });
   };
 
-  // 도메인 변경 시 X 재분할 + 현재 "근사"로 Y 재샘플
   const resampleDomain = () => {
     if (!active) return;
     const { xmin, xmax, degree, points } = active;
@@ -267,43 +331,33 @@ export default function Studio() {
     const ys = points.map((p) => p.y);
     const coeffs = fitPolyCoeffs(xs, ys, Math.min(degree, Math.max(0, points.length - 1)));
     const f = coeffsToFn(coeffs);
-
     const n = points.length;
     const nx = Array.from({ length: n }, (_, i) => xmin + ((xmax - xmin) * i) / (n - 1));
     const newPts = nx.map((x, i) => ({ id: i, x, y: Number(f(x)) || 0 }));
-
-    setTabState((st) => {
-      const cur = st[activeId];
-      return { ...st, [activeId]: { ...cur, points: newPts, ver: cur.ver + 1 } };
-    });
+    setTabState((st) => ({ ...st, [activeId]: { ...st[activeId], points: newPts, ver: st[activeId].ver + 1 } }));
   };
 
-  // Toolbar에서 숫자 입력 후 엔터/포커스아웃이 없으니 버튼으로도 호출 가능
-  // 사용자가 xmin/xmax/degree를 바꾼 뒤 즉시 재샘플하려면 아래를 버튼에 매달 수도 있음.
-
-  // ── 렌더용 파생값(좌/우 각각) ────────────────────────────
+  // 파생값(캔버스용)
   function deriveFor(tabId) {
     if (!tabId) return null;
-    const state = tabState[tabId];
-    if (!state) return null;
-    const { points, degree } = state;
-    const xs = points.map((p) => p.x);
-    const ys = points.map((p) => p.y);
-    const d = Math.min(degree, Math.max(0, points.length - 1));
+    const s = tabState[tabId];
+    if (!s) return null;
+    const xs = s.points.map((p) => p.x);
+    const ys = s.points.map((p) => p.y);
+    const d = Math.min(s.degree, Math.max(0, s.points.length - 1));
     const coeffs = fitPolyCoeffs(xs, ys, d);
     return {
-      typedFn: exprToFn(state.equation),
+      typedFn: exprToFn(s.equation),
       fittedFn: coeffsToFn(coeffs),
-      xmin: state.xmin,
-      xmax: state.xmax,
-      points,
-      curveKey: coeffs.map((c) => c.toFixed(6)).join("|") + `|v${state.ver}`,
-      updatePoint: (idx, xy) =>
-        setTabState((st) => {
-          const cur = st[tabId];
-          const nextPts = cur.points.map((p, i) => (i === idx ? { ...p, ...xy } : p));
-          return { ...st, [tabId]: { ...cur, points: nextPts } };
-        }),
+      xmin: s.xmin,
+      xmax: s.xmax,
+      points: s.points,
+      curveKey: coeffs.map((c) => c.toFixed(6)).join("|") + `|v${s.ver}`,
+      updatePoint: (idx, xy) => setTabState((st) => {
+        const cur = st[tabId];
+        const nextPts = cur.points.map((p, i) => (i === idx ? { ...p, ...xy } : p));
+        return { ...st, [tabId]: { ...cur, points: nextPts } };
+      }),
     };
   }
 
@@ -312,10 +366,11 @@ export default function Studio() {
   const leftPack = deriveFor(leftActiveId);
   const rightPack = deriveFor(rightActiveId);
 
-  // ── TabBar 컴포넌트 ───────────────────────────────────────
+  // ── 탭바 ──────────────────────────────
   function TabBar({ paneKey }) {
     const ids = panes[paneKey].ids;
     const act = panes[paneKey].activeId;
+
     return (
       <div className="tabbar">
         {ids.map((id) => (
@@ -326,11 +381,35 @@ export default function Studio() {
             onDragStart={(e) => onTabDragStart(id, paneKey, e)}
             onDragEnd={onTabDragEnd}
             onClick={() => setActive(paneKey, id)}
-            title="드래그해서 오른쪽으로 보내면 분할됩니다"
+            onContextMenu={(e) => {
+              e.preventDefault();
+              const menu = document.createElement("div");
+              menu.className = "context-menu";
+              menu.style.position = "fixed";
+              menu.style.top = `${e.clientY}px`;
+              menu.style.left = `${e.clientX}px`;
+              menu.innerHTML = `<div class="menu-item">화면 분할</div>`;
+              document.body.appendChild(menu);
+
+              const closeMenu = () => {
+                if (menu.parentNode) document.body.removeChild(menu);
+                window.removeEventListener("click", closeMenu);
+              };
+              window.addEventListener("click", closeMenu);
+
+              menu.querySelector(".menu-item").addEventListener("click", () => {
+                if (!isSplit) setIsSplit(true);
+                moveTabToPane(id, paneKey, "right");
+                setFocusedPane("right");
+                closeMenu();
+              });
+            }}
+            title="드래그하거나 우클릭 → 화면 분할"
           >
             <span className="tab-title">{tabs.byId[id]?.title ?? "Untitled"}</span>
             <button
               className="tab-close"
+              draggable={false}
               onClick={(e) => {
                 e.stopPropagation();
                 closeTab(paneKey, id);
@@ -347,25 +426,23 @@ export default function Studio() {
 
   return (
     <div className="studio-root">
-      {/* 좌측: 그래프 열기(탐색기) 전용 */}
+      {/* 좌측: 탐색기 */}
       <LeftPanel
-        onOpenQuick={(formula) => createTab(formula, focusedPane)}
+        onOpenQuick={(f) => createTab(f, focusedPane)}
         onNew={() => createTab("x", focusedPane)}
+        equations={dummyEquations}
+        onPreview={(f) => { setEquationExpr(f); setFocusedPane(focusedPane); }}
       />
 
-      {/* 우측: 툴바 + 에디터 그룹(분할 가능) */}
+      {/* 우측: 툴바 + 에디터 그룹 */}
       <div className="studio-main">
-        {/* 상단 툴바: 활성 탭 제어 */}
         {active && (
           <Toolbar
             equationExpr={active.equation}
             setEquationExpr={setEquationExpr}
             onApply={applyEquation}
             degree={active.degree}
-            setDegree={(v) => {
-              setDegree(v);
-              // 필요 시 실시간 리핏만 원하면 여기서 ver++ 없이도 OK
-            }}
+            setDegree={setDegree}
             xmin={active.xmin}
             xmax={active.xmax}
             setXmin={setXmin}
@@ -374,25 +451,27 @@ export default function Studio() {
           />
         )}
 
-        {/* 에디터 영역: 좌/우 그룹 */}
         <div className={`vscode-split-root ${isSplit ? "is-split" : ""}`}>
           {/* 왼쪽 Pane */}
           <div className="pane" style={{ width: isSplit ? `${leftPct}%` : "100%" }}>
             <div className="pane-title">Left</div>
             <TabBar paneKey="left" />
-            {leftPack ? (
-              <GraphView
-                points={leftPack.points}
-                updatePoint={leftPack.updatePoint}
-                xmin={leftPack.xmin}
-                xmax={leftPack.xmax}
-                fittedFn={leftPack.fittedFn}
-                typedFn={leftPack.typedFn}
-                curveKey={leftPack.curveKey}
-              />
-            ) : (
-              <div className="empty-hint">왼쪽에 열린 탭이 없습니다.</div>
-            )}
+            <div className="pane-content">
+              {leftPack ? (
+                <GraphView
+                  key={`left-${leftActiveId}`}
+                  points={leftPack.points}
+                  updatePoint={leftPack.updatePoint}
+                  xmin={leftPack.xmin}
+                  xmax={leftPack.xmax}
+                  fittedFn={leftPack.fittedFn}
+                  typedFn={leftPack.typedFn}
+                  curveKey={leftPack.curveKey}
+                />
+              ) : (
+                <div className="empty-hint">왼쪽에 열린 탭이 없습니다.</div>
+              )}
+            </div>
           </div>
 
           {/* 분할바 */}
@@ -408,28 +487,43 @@ export default function Studio() {
           {isSplit ? (
             <div className="pane" style={{ width: `${100 - leftPct}%` }}>
               <div className="pane-title">Right</div>
-              <div className="right-drop-zone" onDragOver={onRightDropOver} onDrop={onRightDrop}>
+              <div
+                className="right-drop-zone"
+                onDragEnter={onDropZoneEnter}
+                onDragOver={onRightDropOver}
+                onDragLeave={onDropZoneLeave}
+                onDrop={onRightDrop}
+              >
                 <TabBar paneKey="right" />
-                {rightPack ? (
-                  <GraphView
-                    points={rightPack.points}
-                    updatePoint={rightPack.updatePoint}
-                    xmin={rightPack.xmin}
-                    xmax={rightPack.xmax}
-                    fittedFn={rightPack.fittedFn}
-                    typedFn={rightPack.typedFn}
-                    curveKey={rightPack.curveKey}
-                  />
-                ) : (
-                  <div className="empty-hint">
-                    상단의 탭을 이 영역으로 드래그하면 오른쪽 화면으로 이동합니다.
-                  </div>
-                )}
+                <div className="pane-content">
+                  {rightPack ? (
+                    <GraphView
+                      key={`right-${rightActiveId}`}
+                      points={rightPack.points}
+                      updatePoint={rightPack.updatePoint}
+                      xmin={rightPack.xmin}
+                      xmax={rightPack.xmax}
+                      fittedFn={rightPack.fittedFn}
+                      typedFn={rightPack.typedFn}
+                      curveKey={rightPack.curveKey}
+                    />
+                  ) : (
+                    <div className="empty-hint">
+                      상단의 탭을 이 영역으로 드래그하면 오른쪽 화면으로 이동합니다.
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           ) : (
-            // 분할 전: 오른쪽에 고스트 드롭영역
-            <div className="split-ghost-drop" onDragOver={onRightDropOver} onDrop={onRightDrop} />
+            <div
+              className="split-ghost-drop"
+              onDragEnter={onDropZoneEnter}
+              onDragOver={onRightDropOver}
+              onDragLeave={onDropZoneLeave}
+              onDrop={onRightDrop}
+              title="여기로 드롭하면 화면이 분할됩니다"
+            />
           )}
         </div>
       </div>
