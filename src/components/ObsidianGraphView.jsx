@@ -13,11 +13,12 @@ export default function ObsidianGraphView({
   activeId,
   onActivate,
   onOpenStudio,
+  focusTick = 0,
 }) {
   const fgRef = useRef(null);
   const wrapRef = useRef(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
-
+  
   // 전체 그래프 (정적)
   const fullGraph = useMemo(() => {
     const nodes = [];
@@ -182,7 +183,7 @@ export default function ObsidianGraphView({
       }
     };
     tick();
-  }, [activeId, graph]);
+  }, [activeId, graph, focusTick]);
 
   // 타임랩스 컨트롤 핸들러
   const startTimelapse = () => {
