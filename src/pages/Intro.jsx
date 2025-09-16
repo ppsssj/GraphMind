@@ -2,6 +2,8 @@ import { useNavigate } from "react-router-dom";
 import "../styles/Intro.css";
 import { useState } from "react";
 import ParticleBackground from "../components/ParticleBackground";
+import ForceGraph2D from "react-force-graph-2d";
+
 export default function Intro() {
   const nav = useNavigate();
   const [activeIdx, setActiveIdx] = useState(null);
@@ -134,7 +136,6 @@ export default function Intro() {
               </button>
             ))}
           </div>
-          
         </section>
 
         {/* Features #03 — Use Cases */}
@@ -205,6 +206,42 @@ export default function Intro() {
             >
               Draw Now Graphs
             </button>
+          </div>
+        </section>
+
+        <section className="features howto">
+          <h2>Vault Preview</h2>
+          <div className="howto-grid">
+            <div className="howto-text">
+              <h3>📂 Vault Screen</h3>
+              <ul>
+                <li>Store and manage all your formulas</li>
+                <li>Left: project/formula list</li>
+                <li>Right: tag-based graph clustering</li>
+              </ul>
+            </div>
+            <div className="howto-graph">
+              <ForceGraph2D
+                graphData={{
+                  nodes: [
+                    { id: "Polynomial", group: 1 },
+                    { id: "sin(x)", group: 2 },
+                    { id: "cos(x)", group: 2 },
+                    { id: "exp(x)", group: 3 },
+                    { id: "Logarithm", group: 3 },
+                  ],
+                  links: [
+                    { source: "Polynomial", target: "sin(x)" },
+                    { source: "Polynomial", target: "cos(x)" },
+                    { source: "exp(x)", target: "Logarithm" },
+                  ],
+                }}
+                width={300}
+                height={250}
+                backgroundColor="rgba(0,0,0,0.2)"
+                nodeAutoColorBy="group"
+              />
+            </div>
           </div>
         </section>
       </main>

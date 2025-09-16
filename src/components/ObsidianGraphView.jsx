@@ -1,3 +1,4 @@
+// src/components/ObsidianGraphView.jsx
 import React, {
   useEffect,
   useMemo,
@@ -18,17 +19,24 @@ export default function ObsidianGraphView({
   const fgRef = useRef(null);
   const wrapRef = useRef(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
-  
-  // 전체 그래프 (정적)
+
+  // === 전체 그래프 (정적) - 수식 + 배열 동시 처리 ===
   const fullGraph = useMemo(() => {
     const nodes = [];
     const links = [];
     const noteIds = new Set(notes.map((n) => n.id));
 
+    // 노트(수식/배열) 노드
     notes.forEach((n) =>
-      nodes.push({ id: n.id, label: n.title, type: "note" })
+      nodes.push({
+        id: n.id,
+        label: n.title,
+        // ✅ 배열을 구분해서 칠할 수 있도록 타입 지정
+        type: n.type === "array3d" ? "array" : "note",
+      })
     );
 
+    // 태그 노드 + 노트↔태그 링크
     const tagSet = new Set();
     notes.forEach((n) => {
       (n.tags || []).forEach((t) => {
@@ -41,6 +49,7 @@ export default function ObsidianGraphView({
       });
     });
 
+    // 노트↔노트 링크 (수식-수식, 수식-배열, 배열-배열 모두 지원)
     notes.forEach((n) => {
       (n.links || []).forEach((lid) => {
         if (noteIds.has(lid)) links.push({ source: n.id, target: lid });
@@ -50,7 +59,7 @@ export default function ObsidianGraphView({
     return { nodes, links };
   }, [notes]);
 
-  // 크기 추적
+  // === 크기 추적 ===
   useLayoutEffect(() => {
     if (!wrapRef.current) return;
     const ro = new ResizeObserver(([entry]) => {
@@ -62,15 +71,14 @@ export default function ObsidianGraphView({
   }, []);
 
   // === 타임랩스 전용 상태 ===
-  const [graph, setGraph] = useState({ nodes: [], links: [] }); // 현재 화면에 보이는 그래프
+  const [graph, setGraph] = useState({ nodes: [], links: [] }); // 현재 화면 그래프
   const [isPlaying, setIsPlaying] = useState(false);
-  const [cursor, setCursor] = useState(0); // 타임라인에서 현재 스텝
-  const [speed, setSpeed] = useState(1); // 0.5x~4x 등 배속
-  const [showControls, setShowControls] = useState(false); // 타임랩스 컨트롤 표시 여부
+  const [cursor, setCursor] = useState(0);
+  const [speed, setSpeed] = useState(1);
+  const [showControls, setShowControls] = useState(false);
 
-  // notes의 updatedAt을 기반으로 "생성 이벤트" 타임라인 구성
+  // notes.updatedAt 기반 타임라인 (배열 포함)
   const timeline = useMemo(() => {
-    // 각 노드/링크가 "언제" 생기는지 event 리스트로 정렬
     const steps = [];
     const safeTime = (t) => {
       const v = Number(new Date(t));
@@ -80,14 +88,17 @@ export default function ObsidianGraphView({
       (a, b) => safeTime(a.updatedAt) - safeTime(b.updatedAt)
     );
 
-    // 태그는 처음 등장한 시점에 생성
     const seenTags = new Set();
     for (const n of sortedNotes) {
       const t = safeTime(n.updatedAt);
       steps.push({
         t,
         type: "node",
-        node: { id: n.id, label: n.title, type: "note" },
+        node: {
+          id: n.id,
+          label: n.title,
+          type: n.type === "array3d" ? "array" : "note", // ✅
+        },
       });
 
       for (const tag of n.tags || []) {
@@ -104,10 +115,9 @@ export default function ObsidianGraphView({
       }
     }
 
-    // 노트-노트 링크는 둘 중 "더 나중에 업데이트된 시점"에 생성
     const noteIds = new Set(notes.map((n) => n.id));
     const idToTime = new Map(notes.map((n) => [n.id, safeTime(n.updatedAt)]));
-    const dedup = new Set(); // 양방향 중복 제거
+    const dedup = new Set();
     for (const n of notes) {
       for (const lid of n.links || []) {
         if (!noteIds.has(lid)) continue;
@@ -120,7 +130,7 @@ export default function ObsidianGraphView({
       }
     }
 
-    steps.sort((a, b) => a.t - b.t || (a.type === "node" ? -1 : 1)); // 같은 시각이면 node 먼저
+    steps.sort((a, b) => a.t - b.t || (a.type === "node" ? -1 : 1));
     return steps;
   }, [notes]);
 
@@ -134,7 +144,7 @@ export default function ObsidianGraphView({
       return;
     }
 
-    const nextDelay = Math.max(50, 200 / speed); // 속도 조절
+    const nextDelay = Math.max(50, 200 / speed);
     const to = setTimeout(() => {
       const step = timeline[cursor];
       setGraph((prev) => {
@@ -159,12 +169,12 @@ export default function ObsidianGraphView({
     return () => clearTimeout(to);
   }, [isPlaying, cursor, speed, total, timeline]);
 
-  // 타임랩스가 아닐 땐 항상 전체 그래프 보여주기
+  // 타임랩스가 아닐 때 전체 그래프 표시
   useEffect(() => {
     if (!isPlaying && cursor === 0) setGraph(fullGraph);
   }, [fullGraph, isPlaying, cursor]);
 
-  // 활성 노드로 카메라 이동 (해당 노드가 "보일 때"까지 기다림)
+  // 활성 노드로 카메라 이동
   useEffect(() => {
     if (!activeId || !fgRef.current) return;
     let tries = 0;
@@ -185,9 +195,15 @@ export default function ObsidianGraphView({
     tick();
   }, [activeId, graph, focusTick]);
 
-  // 타임랩스 컨트롤 핸들러
+  // 초기 줌 레벨 설정
+  useEffect(() => {
+    if (fgRef.current) {
+      fgRef.current.zoom(0.5, 600); // 초기 줌 레벨 설정
+    }
+  }, []);
+
+  // 타임랩스 컨트롤
   const startTimelapse = () => {
-    // 먼저 재생 ON → "재생 아님이면 풀그래프" 효과가 작동하지 않게 함
     setIsPlaying(true);
     setCursor(0);
     setGraph({ nodes: [], links: [] });
@@ -233,9 +249,14 @@ export default function ObsidianGraphView({
             const isActive = node.id === activeId;
             const fontSize = Math.max(8, 4 / globalScale + (isActive ? 3 : 0));
 
+            // ✅ 타입별 색상
+            let color = "#6ee7b7"; // note/equation (green)
+            if (node.type === "tag") color = "#60a5fa"; // tag (blue)
+            if (node.type === "array") color = "#f59e0b"; // array (amber)
+
             ctx.beginPath();
             ctx.arc(node.x, node.y, isActive ? 6 : 4, 0, Math.PI * 2, false);
-            ctx.fillStyle = node.type === "tag" ? "#60a5fa" : "#6ee7b7";
+            ctx.fillStyle = color;
             ctx.globalAlpha = isActive ? 1 : 0.9;
             ctx.fill();
 
@@ -285,7 +306,6 @@ export default function ObsidianGraphView({
             onClick={() => setShowControls(true)}
             aria-label="Show timelapse controls"
           >
-            {/* 시계 아이콘 */}
             <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
               <circle cx="14" cy="14" r="12" stroke="#60a5fa" strokeWidth="2" />
               <rect x="13" y="7" width="2" height="8" rx="1" fill="#60a5fa" />
@@ -321,7 +341,6 @@ export default function ObsidianGraphView({
               onClick={() => setShowControls(false)}
               aria-label="Close timelapse controls"
             >
-              {/* X 아이콘 */}
               <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
                 <line
                   x1="5"
@@ -403,6 +422,10 @@ export default function ObsidianGraphView({
       <div className="legend">
         <div className="row">
           <span className="dot note" /> Note (equation)
+        </div>
+        <div className="row">
+          {/* ✅ 배열 범례 추가 (dot 기본 스타일을 재사용, 색상만 인라인) */}
+          <span className="dot" style={{ background: "#f59e0b" }} /> Array (3D)
         </div>
         <div className="row">
           <span className="dot tag" /> Tag

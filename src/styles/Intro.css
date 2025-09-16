@@ -421,3 +421,21 @@
     grid-template-columns: 1fr;
   }
 }
+
+.howto-grid {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+}
+
+.howto-text {
+  flex: 1;
+  color: #dce1f5;
+}
+
+.howto-graph {
+  flex: 1;
+  background: rgba(0,0,0,0.4);
+  border-radius: 12px;
+  padding: 12px;
+}

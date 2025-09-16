@@ -3,7 +3,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import EquationList from "../components/EquationList";
 import ObsidianGraphView from "../components/ObsidianGraphView";
-import { dummyEquations } from "../data/dummyEquations";
+// ✅ 배열 포함 시드로 교체
+import { dummyResources } from "../data/dummyEquations";
 import NewResourceModal from "../components/NewResourceModal";
 import "../styles/Vault.css";
 
@@ -37,8 +38,9 @@ export default function Vault() {
   const [dragging, setDragging] = useState(false);
   const [showNew, setShowNew] = useState(false);
   const [focusTick, setFocusTick] = useState(0);
+
   useEffect(() => {
-    // 1) 새 키 우선
+    // 1) 새 저장 키 우선
     const newStr = localStorage.getItem(LS_KEY_NEW);
     if (newStr) {
       try {
@@ -50,7 +52,7 @@ export default function Vault() {
         }
       } catch {}
     }
-    // 2) 구 키 있으면 마이그레이션
+    // 2) 구 키가 있으면 마이그레이션
     const oldStr = localStorage.getItem(LS_KEY_OLD);
     if (oldStr) {
       try {
@@ -62,12 +64,13 @@ export default function Vault() {
         return;
       } catch {}
     }
-    // 3) 아무 것도 없으면 더미(수식) 시드 → 마이그레이션 후 저장
-    const seeded = migrateEquationsToResources(dummyEquations);
+    // 3) 아무 것도 없으면 데모(수식+배열) 시드
+    const seeded = dummyResources; // ✅ 수식 + 배열 동시 포함
     localStorage.setItem(LS_KEY_NEW, JSON.stringify(seeded));
     setNotes(seeded);
     setActiveId(seeded[0]?.id || null);
   }, []);
+
   const activeNote = useMemo(
     () => notes.find((n) => n.id === activeId) || null,
     [notes, activeId]
@@ -77,6 +80,7 @@ export default function Vault() {
     setNotes(next);
     localStorage.setItem(LS_KEY_NEW, JSON.stringify(next));
   };
+
   const handleOpenStudio = (id) => {
     const note = notes.find((n) => n.id === id);
     if (!note) return;
@@ -100,12 +104,14 @@ export default function Vault() {
       });
     }
   };
+
   const importDummy = () => {
-    const seeded = migrateEquationsToResources(dummyEquations);
+    const seeded = dummyResources; // ✅ 수식 + 배열 동시 포함
     localStorage.setItem(LS_KEY_NEW, JSON.stringify(seeded));
     setNotes(seeded);
     setActiveId(seeded[0]?.id || null);
   };
+
   const exportJson = () => {
     try {
       const blob = new Blob([JSON.stringify(notes, null, 2)], {
@@ -123,6 +129,7 @@ export default function Vault() {
       console.error("Export failed:", e);
     }
   };
+
   const onCreateResource = ({ type, title, formula, content }) => {
     const id = Date.now().toString(36);
     const item =
@@ -158,6 +165,7 @@ export default function Vault() {
       });
     }
   };
+
   useEffect(() => {
     if (!dragging) return;
     const handleMouseMove = (e) => {
@@ -174,8 +182,6 @@ export default function Vault() {
       window.removeEventListener("mouseup", handleMouseUp);
     };
   }, [dragging]);
-  // // 현재는 수식만 왼쪽 리스트에 표시 (배열은 새로 만들기/Studio에서 확인)
-  // const equationOnly = notes.filter((n) => n.type === "equation");
 
   return (
     <div className="vault-root" style={{ display: "flex", height: "100%" }}>
@@ -215,10 +221,8 @@ export default function Vault() {
           onMouseDown={() => setDragging(true)}
         />
       </div>
-      <div
-        className="vault-right"
-        style={{ flex: 1, minWidth: 0, height: "100%" }}
-      >
+
+      <div className="vault-right" style={{ flex: 1, minWidth: 0, height: "100%" }}>
         <div className="vault-topbar">
           <div>
             <div style={{ fontSize: 12, color: "#9aa4b2" }}>Vault</div>
@@ -244,13 +248,14 @@ export default function Vault() {
             </button>
           </div>
         </div>
-        {/* ObsidianGraphView가 수식 전용이라면 안전하게 필터링해서 전달 */}
+
+        {/* ✅ 수식만 필터하던 부분 제거 → 배열도 함께 전달 */}
         <ObsidianGraphView
-          notes={notes.filter((n) => n.type === "equation")}
+          notes={notes}
           activeId={activeId}
           onActivate={setActiveId}
           onOpenStudio={handleOpenStudio}
-           focusTick={focusTick} 
+          focusTick={focusTick}
         />
       </div>
 
