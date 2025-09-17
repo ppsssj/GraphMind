@@ -32,6 +32,21 @@
   margin-top: -2px;
 }
 
+.intro-nav{
+  display: flex;
+  gap: 20px;
+  align-items: center;
+}
+
+.nav-btn {
+  background-color: #0d071e;
+  border-radius : 5px;
+  font-size : 14px;
+  color : #dce1f5;
+  padding : 6px 12px;
+  
+}
+
 .ghost {
   background: transparent;
   border: 1px solid var(--border);
@@ -437,5 +452,12 @@
   flex: 1;
   background: rgba(0,0,0,0.4);
   border-radius: 12px;
-  padding: 12px;
+  padding: 8px;
+}
+.studio-demo-graph {
+  width: 340px;
+  height: 240px;
+  background: rgba(0,0,0,0.7);
+  border-radius: 12px;
+  overflow: hidden;
 }

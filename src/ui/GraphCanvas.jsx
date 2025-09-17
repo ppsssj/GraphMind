@@ -1,6 +1,11 @@
 import { useMemo, useRef, useState, useEffect } from "react";
 import { Canvas } from "@react-three/fiber";
-import { OrbitControls, TransformControls, Text, useCursor } from "@react-three/drei";
+import {
+  OrbitControls,
+  TransformControls,
+  Text,
+  useCursor,
+} from "@react-three/drei";
 import * as THREE from "three";
 
 function Axes({ xmin = -8, xmax = 8, ymin = -8, ymax = 8 }) {
@@ -12,7 +17,9 @@ function Axes({ xmin = -8, xmax = 8, ymin = -8, ymax = 8 }) {
       <line>
         <bufferGeometry
           attach="geometry"
-          attributes-position={new THREE.Float32BufferAttribute([xmin, 0, 0, xmax, 0, 0], 3)}
+          attributes-position={
+            new THREE.Float32BufferAttribute([xmin, 0, 0, xmax, 0, 0], 3)
+          }
         />
         <lineBasicMaterial color="#6039BC" linewidth={3} />
       </line>
@@ -20,7 +27,9 @@ function Axes({ xmin = -8, xmax = 8, ymin = -8, ymax = 8 }) {
       <line>
         <bufferGeometry
           attach="geometry"
-          attributes-position={new THREE.Float32BufferAttribute([0, ymin, 0, 0, ymax, 0], 3)}
+          attributes-position={
+            new THREE.Float32BufferAttribute([0, ymin, 0, 0, ymax, 0], 3)
+          }
         />
         <lineBasicMaterial color="#6039BC" linewidth={3} />
       </line>
@@ -48,7 +57,12 @@ function Curve({ fn, xmin, xmax, color = "white" }) {
   return (
     <line>
       <bufferGeometry>
-        <bufferAttribute attach="attributes-position" array={positions} count={positions.length / 3} itemSize={3} />
+        <bufferAttribute
+          attach="attributes-position"
+          array={positions}
+          count={positions.length / 3}
+          itemSize={3}
+        />
       </bufferGeometry>
       <lineBasicMaterial color={color} linewidth={2} />
     </line>
@@ -93,7 +107,13 @@ function EditablePoint({ index, position, onChange, setControlsBusy }) {
         </mesh>
       </TransformControls>
       <group position={[position.x + 0.08, position.y + 0.08, 0]}>
-        <Text fontSize={0.16} anchorX="left" anchorY="bottom" outlineWidth={0.004} outlineColor="black">
+        <Text
+          fontSize={0.16}
+          anchorX="left"
+          anchorY="bottom"
+          outlineWidth={0.004}
+          outlineColor="black"
+        >
           {`(${position.x.toFixed(2)}, ${position.y.toFixed(2)})`}
         </Text>
       </group>
@@ -102,8 +122,18 @@ function EditablePoint({ index, position, onChange, setControlsBusy }) {
 }
 
 /* 점 직접 드래그 */
-function DraggablePoint({ index, position, xmin, xmax, onChange, setControlsBusy }) {
-  const plane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), []);
+function DraggablePoint({
+  index,
+  position,
+  xmin,
+  xmax,
+  onChange,
+  setControlsBusy,
+}) {
+  const plane = useMemo(
+    () => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0),
+    []
+  );
   const hit = useRef(new THREE.Vector3());
   const [hovered, setHovered] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -143,8 +173,14 @@ function DraggablePoint({ index, position, xmin, xmax, onChange, setControlsBusy
     <group>
       <mesh
         position={[position.x, position.y, 0]}
-        onPointerOver={(e) => { e.stopPropagation(); setHovered(true); }}
-        onPointerOut={(e) => { e.stopPropagation(); setHovered(false); }}
+        onPointerOver={(e) => {
+          e.stopPropagation();
+          setHovered(true);
+        }}
+        onPointerOut={(e) => {
+          e.stopPropagation();
+          setHovered(false);
+        }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
@@ -158,7 +194,13 @@ function DraggablePoint({ index, position, xmin, xmax, onChange, setControlsBusy
       </mesh>
 
       <group position={[position.x + 0.08, position.y + 0.08, 0]}>
-        <Text fontSize={0.16} anchorX="left" anchorY="bottom" outlineWidth={0.004} outlineColor="black">
+        <Text
+          fontSize={0.16}
+          anchorX="left"
+          anchorY="bottom"
+          outlineWidth={0.004}
+          outlineColor="black"
+        >
           {`(${position.x.toFixed(2)}, ${position.y.toFixed(2)})`}
         </Text>
       </group>
@@ -171,16 +213,17 @@ export default function GraphCanvas({
   onPointChange,
   xmin,
   xmax,
-  fn,       // 파랑: 다항 근사
-  typedFn,  // 빨강: 입력 수식
+  fn, // 파랑: 다항 근사
+  typedFn, // 빨강: 입력 수식
   curveKey, // 리마운트 키
+  showControls = true,
 }) {
   const wrapperRef = useRef(null);
   const [controlsBusy, setControlsBusy] = useState(false);
 
   const [viewMode, setViewMode] = useState("both"); // "typed" | "fit" | "both"
   const showTyped = typedFn && (viewMode === "typed" || viewMode === "both");
-  const showFit   = fn && (viewMode === "fit" || viewMode === "both");
+  const showFit = fn && (viewMode === "fit" || viewMode === "both");
 
   const [editMode, setEditMode] = useState("drag"); // "arrows" | "drag"
 
@@ -189,7 +232,7 @@ export default function GraphCanvas({
       ref={wrapperRef}
       style={{
         position: "relative",
-        flex: 1,           // pane-content의 남은 공간을 채움
+        flex: 1, // pane-content의 남은 공간을 채움
         width: "100%",
         height: "100%",
         overflow: "hidden",
@@ -198,7 +241,7 @@ export default function GraphCanvas({
       <Canvas
         orthographic
         camera={{ zoom: 80, position: [0, 0, 10] }}
-        style={{ width: "100%", height: "100%" }} 
+        style={{ width: "100%", height: "100%" }}
         onCreated={({ gl }) => {
           gl.setClearColor(new THREE.Color("#0f1115"), 1.0);
         }}
@@ -208,8 +251,24 @@ export default function GraphCanvas({
 
         <Axes />
 
-        {showFit && <Curve key={curveKey + "|fit"} fn={fn} xmin={xmin} xmax={xmax} color="#64b5f6" />}
-        {showTyped && <Curve key={curveKey + "|typed"} fn={typedFn} xmin={xmin} xmax={xmax} color="#ff5252" />}
+        {showFit && (
+          <Curve
+            key={curveKey + "|fit"}
+            fn={fn}
+            xmin={xmin}
+            xmax={xmax}
+            color="#64b5f6"
+          />
+        )}
+        {showTyped && (
+          <Curve
+            key={curveKey + "|typed"}
+            fn={typedFn}
+            xmin={xmin}
+            xmax={xmax}
+            color="#ff5252"
+          />
+        )}
 
         {points.map((p, i) =>
           editMode === "arrows" ? (
@@ -235,136 +294,143 @@ export default function GraphCanvas({
 
         <OrbitControls makeDefault enabled={!controlsBusy} />
       </Canvas>
-
-      {/* 우상단 오버레이: 반응형(줄바꿈/축소) */}
-      <div
-        style={{
-          position: "absolute",
-          right: 8,
-          top: 8,
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 8,
-          alignItems: "flex-start",
-          maxWidth: "calc(100% - 16px)",
-          boxSizing: "border-box",
-          overflow: "hidden",
-        }}
-      >
-        {/* 보기 */}
+      {/* 우상단 오버레이: 반응형(줄바꿈/축소) */}{" "}
+      {showControls && (
         <div
           style={{
-            background: "rgba(0,0,0,0.55)",
-            color: "#fff",
-            padding: "4px 6px",
-            borderRadius: 8,
-            fontSize: 11,
-            lineHeight: 1.2,
-            flex: "1 1 auto",
-            minWidth: "120px",
+            position: "absolute",
+            right: 8,
+            top: 8,
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 8,
+            alignItems: "flex-start",
+            maxWidth: "calc(100% - 16px)",
+            boxSizing: "border-box",
+            overflow: "hidden",
           }}
         >
-          <div style={{ marginBottom: 6, opacity: 0.9 }}>보기</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button
-              onClick={() => setViewMode("typed")}
-              style={{
-                padding: "4px 6px",
-                borderRadius: 6,
-                border: "1px solid rgba(255,255,255,0.25)",
-                background: viewMode === "typed" ? "#ff5252" : "transparent",
-                color: viewMode === "typed" ? "#000" : "#fff",
-                cursor: "pointer",
-              }}
-              title="입력 수식만"
-            >
-              수식만
-            </button>
-            <button
-              onClick={() => setViewMode("fit")}
-              style={{
-                padding: "4px 6px",
-                borderRadius: 6,
-                border: "1px solid rgba(255,255,255,0.25)",
-                background: viewMode === "fit" ? "#64b5f6" : "transparent",
-                color: viewMode === "fit" ? "#000" : "#fff",
-                cursor: "pointer",
-              }}
-              title="다항식 근사만"
-            >
-              근사만
-            </button>
-            <button
-              onClick={() => setViewMode("both")}
-              style={{
-                padding: "4px 6px",
-                borderRadius: 6,
-                border: "1px solid rgba(255,255,255,0.25)",
-                background: viewMode === "both" ? "#fff" : "transparent",
-                color: viewMode === "both" ? "#000" : "#fff",
-                cursor: "pointer",
-              }}
-              title="둘 다 보기"
-            >
-              둘다
-            </button>
+          {/* 보기 */}
+          <div
+            style={{
+              background: "rgba(0,0,0,0.55)",
+              color: "#fff",
+              padding: "4px 6px",
+              borderRadius: 8,
+              fontSize: 11,
+              lineHeight: 1.2,
+              flex: "1 1 auto",
+              minWidth: "120px",
+            }}
+          >
+            <div style={{ marginBottom: 6, opacity: 0.9 }}>보기</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                onClick={() => setViewMode("typed")}
+                style={{
+                  padding: "4px 6px",
+                  borderRadius: 6,
+                  border: "1px solid rgba(255,255,255,0.25)",
+                  background: viewMode === "typed" ? "#ff5252" : "transparent",
+                  color: viewMode === "typed" ? "#000" : "#fff",
+                  cursor: "pointer",
+                }}
+                title="입력 수식만"
+              >
+                수식만
+              </button>
+              <button
+                onClick={() => setViewMode("fit")}
+                style={{
+                  padding: "4px 6px",
+                  borderRadius: 6,
+                  border: "1px solid rgba(255,255,255,0.25)",
+                  background: viewMode === "fit" ? "#64b5f6" : "transparent",
+                  color: viewMode === "fit" ? "#000" : "#fff",
+                  cursor: "pointer",
+                }}
+                title="다항식 근사만"
+              >
+                근사만
+              </button>
+              <button
+                onClick={() => setViewMode("both")}
+                style={{
+                  padding: "4px 6px",
+                  borderRadius: 6,
+                  border: "1px solid rgba(255,255,255,0.25)",
+                  background: viewMode === "both" ? "#fff" : "transparent",
+                  color: viewMode === "both" ? "#000" : "#fff",
+                  cursor: "pointer",
+                }}
+                title="둘 다 보기"
+              >
+                둘다
+              </button>
+            </div>
+
+            <div style={{ marginTop: 8, opacity: 0.9 }}>
+              <div>
+                <span style={{ color: "#ff5252" }}>■</span> 입력 수식
+              </div>
+              <div>
+                <span style={{ color: "#64b5f6" }}>■</span> 다항 근사
+              </div>
+            </div>
           </div>
 
-          <div style={{ marginTop: 8, opacity: 0.9 }}>
-            <div><span style={{ color: "#ff5252" }}>■</span> 입력 수식</div>
-            <div><span style={{ color: "#64b5f6" }}>■</span> 다항 근사</div>
+          {/* 편집 */}
+          <div
+            style={{
+              background: "rgba(0,0,0,0.55)",
+              color: "#fff",
+              padding: "4px 6px",
+              borderRadius: 8,
+              fontSize: 11,
+              lineHeight: 1.2,
+              flex: "1 1 auto",
+              minWidth: "120px",
+            }}
+          >
+            <div style={{ marginBottom: 6, opacity: 0.9 }}>편집</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                onClick={() => setEditMode("arrows")}
+                style={{
+                  padding: "4px 6px",
+                  borderRadius: 6,
+                  border: "1px solid rgba(255,255,255,0.25)",
+                  background: editMode === "arrows" ? "#fff" : "transparent",
+                  color: editMode === "arrows" ? "#000" : "#fff",
+                  cursor: "pointer",
+                }}
+                title="화살표(TransformControls)로 이동"
+              >
+                화살표
+              </button>
+              <button
+                onClick={() => setEditMode("drag")}
+                style={{
+                  padding: "4px 6px",
+                  borderRadius: 6,
+                  border: "1px solid rgba(255,255,255,0.25)",
+                  background: editMode === "drag" ? "#fff" : "transparent",
+                  color: editMode === "drag" ? "#000" : "#fff",
+                  cursor: "pointer",
+                }}
+                title="점 직접 드래그로 이동"
+              >
+                드래그
+              </button>
+            </div>
+            <div style={{ marginTop: 6, opacity: 0.8 }}>
+              {editMode === "drag"
+                ? "점 클릭 후 드래그"
+                : "노란점의 화살표로 이동"}
+            </div>
           </div>
         </div>
-
-        {/* 편집 */}
-        <div
-          style={{
-            background: "rgba(0,0,0,0.55)",
-            color: "#fff",
-            padding: "4px 6px",
-            borderRadius: 8,
-            fontSize: 11,
-            lineHeight: 1.2,
-            flex: "1 1 auto",
-            minWidth: "120px",
-          }}
-        >
-          <div style={{ marginBottom: 6, opacity: 0.9 }}>편집</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button
-              onClick={() => setEditMode("arrows")}
-              style={{
-                padding: "4px 6px",
-                borderRadius: 6,
-                border: "1px solid rgba(255,255,255,0.25)",
-                background: editMode === "arrows" ? "#fff" : "transparent",
-                color: editMode === "arrows" ? "#000" : "#fff",
-                cursor: "pointer",
-              }}
-              title="화살표(TransformControls)로 이동"
-            >
-              화살표
-            </button>
-            <button
-              onClick={() => setEditMode("drag")}
-              style={{
-                padding: "4px 6px",
-                borderRadius: 6,
-                border: "1px solid rgba(255,255,255,0.25)",
-                background: editMode === "drag" ? "#fff" : "transparent",
-                color: editMode === "drag" ? "#000" : "#fff",
-                cursor: "pointer",
-              }}
-              title="점 직접 드래그로 이동"
-            >
-              드래그
-            </button>
-          </div>
-          <div style={{ marginTop: 6, opacity: 0.8 }}>
-            {editMode === "drag" ? "점 클릭 후 드래그" : "노란점의 화살표로 이동"}
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

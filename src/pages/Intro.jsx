@@ -1,15 +1,15 @@
 import { useNavigate } from "react-router-dom";
 import "../styles/Intro.css";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import ParticleBackground from "../components/ParticleBackground";
-import ForceGraph2D from "react-force-graph-2d";
-
+import MiniVaultDemo from "../components/MiniVaultDemo";
+import Plot from "react-plotly.js";
+import GraphCanvas from "../ui/GraphCanvas";
 export default function Intro() {
   const nav = useNavigate();
   const [activeIdx, setActiveIdx] = useState(null);
-
-  // 카드에서 사용할 데이터 (배경 이미지 + 설명 포함)
-  // Intro.jsx 안의 useCases를 이걸로 교체
+  const demoRef = useRef(null);
+  // 카드에서 사용할 데이터 (배경 이미지 + 설명 포함) - Intro.jsx 안의 useCases를 이걸로 교체
   const useCases = [
     {
       icon: "🎓",
@@ -53,6 +53,40 @@ export default function Intro() {
             <div className="brand-sub">Math. Graph. AI</div>
           </div>
         </div>
+        {/* 네비게이션 바 추가 */}
+        <nav className="intro-nav">
+          <button
+            className="nav-btn"
+            onClick={() =>
+              document
+                .getElementById("features")
+                .scrollIntoView({ behavior: "smooth" })
+            }
+          >
+            Features
+          </button>
+          <button
+            className="nav-btn"
+            onClick={() =>
+              document
+                .getElementById("howto")
+                .scrollIntoView({ behavior: "smooth" })
+            }
+          >
+            How to use
+          </button>
+          <button
+            className="nav-btn"
+            onClick={() =>
+              document
+                .getElementById("cta-head")
+                .scrollIntoView({ behavior: "smooth" })
+            }
+          >
+            Get Started
+          </button>
+        </nav>
+        {/* 추후 로그인 기능 추가 시 활성화 */}
         <button className="ghost">Login</button>
       </header>
 
@@ -90,7 +124,7 @@ export default function Intro() {
         </div>
 
         {/* Features #01 */}
-        <section className="features">
+        <section className="features" id="features">
           <span className="features-flow">[feature Section - #01]</span>
           <h2>Key Features</h2>
           <img
@@ -189,6 +223,97 @@ export default function Intro() {
             </div>
           </div>
         </section>
+        <section className="features howto" id="howto">
+          <span className="features-flow">[Flow Section - #01]</span>
+
+          <h2>Vault Preview</h2>
+          <div className="howto-grid">
+            {/* LEFT: 버튼 */}
+            <div className="howto-text">
+              <h3>Mini Vault Demo</h3>
+              <p>
+                GraphMind의 Vault(저장소)에서 제공하는 미니 데모입니다.
+                <br />
+                버튼을 눌러 그래프에 노드/링크를 단계별로 추가해 보세요.
+              </p>
+              <div className="howto-actions">
+                <button
+                  onClick={() => demoRef.current?.step1()}
+                  className="btn"
+                >
+                  1) sin(x) 노드 생성 (tag: sin)
+                </button>
+                <button
+                  onClick={() => demoRef.current?.step2()}
+                  className="btn"
+                >
+                  2) sin(x²) 노드 생성 (tag: sin)
+                </button>
+                <button
+                  onClick={() => demoRef.current?.step3()}
+                  className="btn"
+                >
+                  3) cos(x) 노드 생성 (tag: cos)
+                </button>
+                <button
+                  onClick={() => demoRef.current?.step4()}
+                  className="btn"
+                >
+                  4) log(x) 노드 생성 (tag: log){" "}
+                </button>
+                <button
+                  onClick={() => demoRef.current?.reset()}
+                  className="btn ghost"
+                >
+                  Reset
+                </button>
+              </div>
+              <p className="hint">
+                버튼을 눌러 그래프에 노드/링크를 단계별로 추가해 보세요.
+              </p>
+            </div>
+
+            {/* RIGHT: 그래프 */}
+            <div className="howto-graph">
+              <MiniVaultDemo ref={demoRef} />
+            </div>
+          </div>
+        </section>
+
+        <section className="features howto">
+          <span className="features-flow">[Flow Section - #02]</span>
+          <h2>Studio Preview</h2>
+          <div className="howto-grid">
+            <div className="howto-text">
+              <h3>Mini Studio Demo</h3>
+              <p>GraphMind의 Studio(작업공간) 미니 데모입니다.</p>
+              <p>마우스로 회전/이동, 휠 스크롤로 확대/축소가 가능합니다.</p>
+              <p>아래 그래프는 sin(x) 입니다.</p>
+            </div>
+
+            <div className="howto-graph">
+              <div className="studio-demo-graph">
+                <GraphCanvas
+                  points={[
+                    { x: -2, y: Math.sin(-2) },
+                    { x: 0, y: Math.sin(0) },
+                    { x: 2, y: Math.sin(2) },
+                  ]}
+                  onPointChange={(idx, pos) =>
+                    console.log("point moved", idx, pos)
+                  }
+                  xmin={-8}
+                  xmax={8}
+                  fn={(x) => Math.sin(x)} // 파랑: 근사
+                  typedFn={(x) => Math.sin(x)} // 빨강: 입력식
+                  curveKey="sin-demo"
+                  showControls={false}
+                />
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section className="cta-banner" aria-labelledby="cta-head">
           <div className="cta-banner-inner">
             <p className="cta-kicker">BEYOND SYMBOLS</p>
@@ -199,49 +324,9 @@ export default function Intro() {
               Draw your space with a single equation. <br />
               Explore, learn, and create in real-time 3D.
             </p>
-            <button
-              className="cta-large"
-              onClick={() => nav("/vault")}
-              aria-label="그래프를 그리다 페이지로 이동"
-            >
-              Draw Now Graphs
+            <button className="cta" onClick={() => nav("/vault")}>
+              Get Started
             </button>
-          </div>
-        </section>
-
-        <section className="features howto">
-          <h2>Vault Preview</h2>
-          <div className="howto-grid">
-            <div className="howto-text">
-              <h3>📂 Vault Screen</h3>
-              <ul>
-                <li>Store and manage all your formulas</li>
-                <li>Left: project/formula list</li>
-                <li>Right: tag-based graph clustering</li>
-              </ul>
-            </div>
-            <div className="howto-graph">
-              <ForceGraph2D
-                graphData={{
-                  nodes: [
-                    { id: "Polynomial", group: 1 },
-                    { id: "sin(x)", group: 2 },
-                    { id: "cos(x)", group: 2 },
-                    { id: "exp(x)", group: 3 },
-                    { id: "Logarithm", group: 3 },
-                  ],
-                  links: [
-                    { source: "Polynomial", target: "sin(x)" },
-                    { source: "Polynomial", target: "cos(x)" },
-                    { source: "exp(x)", target: "Logarithm" },
-                  ],
-                }}
-                width={300}
-                height={250}
-                backgroundColor="rgba(0,0,0,0.2)"
-                nodeAutoColorBy="group"
-              />
-            </div>
           </div>
         </section>
       </main>
