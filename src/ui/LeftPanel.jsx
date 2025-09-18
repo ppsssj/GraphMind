@@ -1,7 +1,6 @@
 // src/ui/LeftPanel.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { create, all } from "mathjs";
-
 const math = create(all, {});
 
 // ── helpers ───────────────────────────────────────────
@@ -26,7 +25,27 @@ function exprToFn(raw) {
   }
 }
 
-// ── Sparkline (미니 프리뷰 캔버스) ───────────────────────
+function array3dDims(content) {
+  const Z = content?.length ?? 0;
+  const Y = Z ? content[0]?.length ?? 0 : 0;
+  const X = Y ? content[0][0]?.length ?? 0 : 0;
+  return { X, Y, Z };
+}
+function array3dNonZero(content) {
+  let cnt = 0;
+  for (let z = 0; z < content.length; z++) {
+    const yz = content[z] || [];
+    for (let y = 0; y < yz.length; y++) {
+      const row = yz[y] || [];
+      for (let x = 0; x < row.length; x++) {
+        if (row[x]) cnt++;
+      }
+    }
+  }
+  return cnt;
+}
+
+// ── Sparkline (2D 미니 프리뷰) ───────────────────────
 function Sparkline({
   formula,
   width = 160,
@@ -66,7 +85,6 @@ function Sparkline({
     let ymax = Math.max(...pts.map(p => p.y));
     if (!Number.isFinite(ymin) || !Number.isFinite(ymax)) return;
     if (ymin === ymax) { ymin -= 1; ymax += 1; }
-    // 살짝 여유
     const pad = (ymax - ymin) * 0.08;
     ymin -= pad; ymax += pad;
 
@@ -75,7 +93,7 @@ function Sparkline({
 
     // 라인 그리기
     ctx.lineWidth = 1.5;
-    ctx.strokeStyle = "#9aa7c7"; // 프리뷰 라인 컬러
+    ctx.strokeStyle = "#9aa7c7";
     ctx.beginPath();
     pts.forEach((p, i) => {
       const px = xToPx(p.x);
@@ -85,7 +103,7 @@ function Sparkline({
     });
     ctx.stroke();
 
-    // 마지막 점 표시(작은 점)
+    // 마지막 점
     const last = pts[pts.length - 1];
     const lx = xToPx(last.x), ly = yToPx(last.y);
     ctx.fillStyle = "#c6d0f5";
@@ -97,36 +115,67 @@ function Sparkline({
   return <canvas ref={ref} className="sparkline" aria-hidden="true" />;
 }
 
-// ── LeftPanel ──────────────────────────────────────────
+// ── LeftPanel (mixed resources 지원) ──────────────────
 export default function LeftPanel({
-  onOpenQuick,     // (formula:string) => void   - 새 탭으로 열기
-  onNew,           // () => void                  - 빈 그래프 생성
-  equations = [],  // [{id,title,formula,tags,updatedAt}]
-  onPreview,       // (formula:string) => void    - 툴바에 미리보기 반영
+  // 구형 호환 props
+  equations = [],                // [{id,title,formula,tags,updatedAt}]
+  // 신형 혼합 입력
+  resources,                     // [{ type: "equation" | "array3d" | ... , ... }]
+  // 액션 콜백
+  onOpenQuick,                   // (formula:string) => void   - equation 전용
+  onPreview,                     // (formula:string) => void   - equation 전용
+  onOpenArray,                   // (res) => void              - array3d 전용 (없으면 onOpenResource로 fallback)
+  onOpenResource,                // (res) => void              - 범용 열기
+  onNew,                         // () => void
 }) {
   const [q, setQ] = useState("");
   const [tag, setTag] = useState("all");
   const [showQuick, setShowQuick] = useState(false);
 
+  // 입력 소스: resources가 있으면 우선 사용, 없으면 equations만 사용
+  const items = useMemo(() => {
+    if (Array.isArray(resources) && resources.length) return resources;
+    return equations.map((e) => ({ ...e, type: "equation" }));
+  }, [resources, equations]);
+
+  const eqs = useMemo(() => items.filter((r) => r.type === "equation"), [items]);
+  const arrs = useMemo(() => items.filter((r) => r.type === "array3d"), [items]);
+
   const tags = useMemo(() => {
     const tset = new Set();
-    equations.forEach((e) => (e.tags || []).forEach((t) => tset.add(t)));
+    items.forEach((e) => (e.tags || []).forEach((t) => tset.add(t)));
     return ["all", ...Array.from(tset)];
-  }, [equations]);
+  }, [items]);
 
-  const filtered = useMemo(() => {
+  const filteredEqs = useMemo(() => {
     const kw = q.trim().toLowerCase();
-    return equations.filter((e) => {
+    return eqs.filter((e) => {
       const byTag = tag === "all" || (e.tags || []).includes(tag);
       const byKw =
         !kw ||
-        e.title.toLowerCase().includes(kw) ||
+        (e.title || "").toLowerCase().includes(kw) ||
         (e.formula || "").toLowerCase().includes(kw);
       return byTag && byKw;
     });
-  }, [equations, q, tag]);
+  }, [eqs, q, tag]);
+
+  const filteredArrs = useMemo(() => {
+    const kw = q.trim().toLowerCase();
+    return arrs.filter((a) => {
+      const byTag = tag === "all" || (a.tags || []).includes(tag);
+      const byKw = !kw || (a.title || "").toLowerCase().includes(kw);
+      return byTag && byKw;
+    });
+  }, [arrs, q, tag]);
 
   const QUICK = ["x", "x^2", "x^3 - 2*x", "sin(x)", "cos(x)", "exp(x)-1", "log(x+1)"];
+
+  const openArray = (res) => {
+    if (onOpenArray) return onOpenArray(res);
+    if (onOpenResource) return onOpenResource(res);
+    // 최후: location.state로 보내는 쪽에서 처리하도록 상위에서 채워 넣어야 함
+    console.warn("[LeftPanel] onOpenArray/onOpenResource 콜백이 없습니다.");
+  };
 
   return (
     <aside className="left-panel explorer">
@@ -161,9 +210,9 @@ export default function LeftPanel({
         </div>
       </div>
 
-      {/* Equations with sparkline preview */}
+      {/* 검색/태그 */}
       <div className="section">
-        <div className="label">Equations</div>
+        <div className="label">Resources</div>
         <div className="row" style={{ gap: 8, marginBottom: 8 }}>
           <input
             className="btn"
@@ -183,9 +232,13 @@ export default function LeftPanel({
             ))}
           </select>
         </div>
+      </div>
 
+      {/* Equations 섹션 */}
+      <div className="section">
+        <div className="label">Equations</div>
         <ul className="eq-list">
-          {filtered.map((e) => (
+          {filteredEqs.map((e) => (
             <li key={e.id} className="eq-item">
               <div className="eq-head">
                 <div className="eq-title">{e.title}</div>
@@ -195,8 +248,6 @@ export default function LeftPanel({
               </div>
 
               <div className="eq-formula">{e.formula}</div>
-
-              {/* Sparkline preview */}
               <Sparkline formula={e.formula} />
 
               {e.tags?.length ? (
@@ -225,11 +276,59 @@ export default function LeftPanel({
               </div>
             </li>
           ))}
-          {filtered.length === 0 && (
+          {filteredEqs.length === 0 && (
             <li className="eq-empty">No matches.</li>
           )}
         </ul>
       </div>
+
+      {/* 3D Arrays 섹션 */}
+      {arrs.length > 0 && (
+        <div className="section">
+          <div className="label">3D Arrays</div>
+          <ul className="eq-list">
+            {filteredArrs.map((a) => {
+              const dims = array3dDims(a.content);
+              const nnz = array3dNonZero(a.content);
+              return (
+                <li key={a.id} className="eq-item">
+                  <div className="eq-head">
+                    <div className="eq-title">{a.title}</div>
+                    {a.updatedAt && (
+                      <div className="eq-updated">{new Date(a.updatedAt).toLocaleDateString()}</div>
+                    )}
+                  </div>
+
+                  <div className="eq-formula">
+                    Size: {dims.X}×{dims.Y}×{dims.Z} &nbsp; | &nbsp; Non-zero: {nnz}
+                  </div>
+
+                  {a.tags?.length ? (
+                    <div className="eq-tags">
+                      {a.tags.map((t) => (
+                        <span key={t} className="chip">{t}</span>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <div className="eq-actions">
+                    <button
+                      className="btn solid"
+                      onClick={() => openArray(a)}
+                      title="Open 3D Array"
+                    >
+                      Open
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+            {filteredArrs.length === 0 && (
+              <li className="eq-empty">No matches.</li>
+            )}
+          </ul>
+        </div>
+      )}
 
       <div className="note">
         Tip: 상단 탭을 드래그해 오른쪽으로 떼면 VSCode처럼 화면이 분할돼요.

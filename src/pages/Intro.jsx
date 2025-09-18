@@ -331,7 +331,7 @@ export default function Intro() {
         </section>
       </main>
 
-      <footer className="intro-footer">© 2025 Designed by (ppssj)</footer>
+      <footer className="intro-footer">© Git : ppsssj</footer>
     </div>
   );
 }
