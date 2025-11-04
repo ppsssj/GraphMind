@@ -1,4 +1,6 @@
-export const dummyEquations = [
+// src/data/dummyEquations.js
+
+export const dummyEquations = [ 
   {
     id: "eq1",
     type: "equation",
@@ -52,24 +54,28 @@ export const dummyArrays3D = [
     type: "array3d",
     title: "Voxel Grid — Small Cross",
     content: [
+      // z = 0
       [
         [0, 0, 0, 0],
         [0, 1, 1, 0],
         [0, 1, 1, 0],
         [0, 0, 0, 0],
       ],
+      // z = 1
       [
         [0, 1, 0, 0],
         [1, 1, 1, 0],
         [0, 1, 0, 0],
         [0, 0, 0, 0],
       ],
+      // z = 2
       [
         [0, 0, 0, 0],
         [0, 1, 1, 0],
         [0, 1, 1, 0],
         [0, 0, 0, 0],
       ],
+      // z = 3
       [
         [0, 0, 0, 0],
         [0, 0, 1, 0],
@@ -86,24 +92,28 @@ export const dummyArrays3D = [
     type: "array3d",
     title: "Sparse Dots",
     content: [
+      // z = 0
       [
         [1, 0, 0, 0],
         [0, 0, 0, 1],
         [0, 0, 1, 0],
         [0, 0, 0, 0],
       ],
+      // z = 1
       [
         [0, 0, 0, 0],
         [0, 1, 0, 0],
         [0, 0, 0, 0],
         [0, 0, 0, 1],
       ],
+      // z = 2
       [
         [0, 0, 0, 0],
         [0, 0, 1, 0],
         [1, 0, 0, 0],
         [0, 0, 0, 0],
       ],
+      // z = 3
       [
         [0, 0, 0, 1],
         [0, 0, 0, 0],

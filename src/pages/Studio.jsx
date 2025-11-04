@@ -1,12 +1,12 @@
 // src/pages/Studio.jsx
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { create, all } from "mathjs";
 import LeftPanel from "../ui/LeftPanel";
 import Toolbar from "../ui/Toolbar";
 import GraphView from "../ui/GraphView";
 import Array3DView from "../ui/Array3DView";
-import { dummyEquations } from "../data/dummyEquations";
+import { dummyEquations, dummyResources } from "../data/dummyEquations";
 import "../styles/Studio.css";
 
 const math = create(all, {});
@@ -365,7 +365,7 @@ export default function Studio() {
   const rightActiveId = panes.right.activeId;
   const leftPack = deriveFor(leftActiveId);
   const rightPack = deriveFor(rightActiveId);
-
+  const navigate = useNavigate();
   // 탭바
   function TabBar({ paneKey }) {
     const ids = panes[paneKey].ids;
@@ -406,7 +406,12 @@ export default function Studio() {
         onOpenQuick={(f) => createTab(f, focusedPane)}
         onNew={() => createTab("x", focusedPane)}
         equations={dummyEquations}
+        resources={dummyResources}
         onPreview={(f) => { setEquationExpr(f); setFocusedPane(focusedPane); }}
+        onOpenArray={(res)=>
+          navigate("/studio", { state: { type: "array3d",title:res.title, content: res.content },
+          })
+        }
       />
 
       <div className="studio-main">
