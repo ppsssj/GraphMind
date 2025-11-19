@@ -20,21 +20,36 @@ export default function ObsidianGraphView({
   const wrapRef = useRef(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
 
-  // === 전체 그래프 (정적) - 수식 + 배열 동시 처리 ===
+  // ✅ 타입별 노출 여부 토글 상태
+  const [filters, setFilters] = useState({
+    note: true, // equation / 일반 노트
+    array: true, // Array (3D)
+    curve: true, // Curve (3D · z-axis)
+    tag: true, // Tag
+  });
+
+  const toggleType = (type) => {
+    setFilters((prev) => ({ ...prev, [type]: !prev[type] }));
+  };
+
+  // === 전체 그래프 (정적) - 수식 + 배열 + curve3d 동시 처리 ===
   const fullGraph = useMemo(() => {
     const nodes = [];
     const links = [];
     const noteIds = new Set(notes.map((n) => n.id));
 
-    // 노트(수식/배열) 노드
-    notes.forEach((n) =>
+    // 노트(수식/배열/curve3d) 노드
+    notes.forEach((n) => {
+      let type = "note";
+      if (n.type === "array3d") type = "array";
+      if (n.type === "curve3d") type = "curve"; // curve3d 전용 타입
+
       nodes.push({
         id: n.id,
         label: n.title,
-        // ✅ 배열을 구분해서 칠할 수 있도록 타입 지정
-        type: n.type === "array3d" ? "array" : "note",
-      })
-    );
+        type,
+      });
+    });
 
     // 태그 노드 + 노트↔태그 링크
     const tagSet = new Set();
@@ -49,7 +64,7 @@ export default function ObsidianGraphView({
       });
     });
 
-    // 노트↔노트 링크 (수식-수식, 수식-배열, 배열-배열 모두 지원)
+    // 노트↔노트 링크 (수식-수식, 수식-배열, 배열-배열, curve 포함)
     notes.forEach((n) => {
       (n.links || []).forEach((lid) => {
         if (noteIds.has(lid)) links.push({ source: n.id, target: lid });
@@ -71,13 +86,13 @@ export default function ObsidianGraphView({
   }, []);
 
   // === 타임랩스 전용 상태 ===
-  const [graph, setGraph] = useState({ nodes: [], links: [] }); // 현재 화면 그래프
+  const [graph, setGraph] = useState({ nodes: [], links: [] }); // 타임랩스/전체 기준 원본 그래프
   const [isPlaying, setIsPlaying] = useState(false);
   const [cursor, setCursor] = useState(0);
   const [speed, setSpeed] = useState(1);
   const [showControls, setShowControls] = useState(false);
 
-  // notes.updatedAt 기반 타임라인 (배열 포함)
+  // notes.updatedAt 기반 타임라인 (배열, curve3d 포함)
   const timeline = useMemo(() => {
     const steps = [];
     const safeTime = (t) => {
@@ -91,13 +106,17 @@ export default function ObsidianGraphView({
     const seenTags = new Set();
     for (const n of sortedNotes) {
       const t = safeTime(n.updatedAt);
+      let nodeType = "note";
+      if (n.type === "array3d") nodeType = "array";
+      if (n.type === "curve3d") nodeType = "curve";
+
       steps.push({
         t,
         type: "node",
         node: {
           id: n.id,
           label: n.title,
-          type: n.type === "array3d" ? "array" : "note", // ✅
+          type: nodeType,
         },
       });
 
@@ -174,7 +193,26 @@ export default function ObsidianGraphView({
     if (!isPlaying && cursor === 0) setGraph(fullGraph);
   }, [fullGraph, isPlaying, cursor]);
 
-  // 활성 노드로 카메라 이동
+  // ✅ 필터 적용된 그래프 (실제 렌더용)
+  const displayGraph = useMemo(() => {
+    const nodes = (graph.nodes || []).filter((n) => {
+      const t = n.type || "note";
+      return filters[t] !== false;
+    });
+
+    const visibleIds = new Set(nodes.map((n) => String(n.id)));
+
+    const links = (graph.links || []).filter((l) => {
+      const s = String(l.source?.id || l.source);
+      const t = String(l.target?.id || l.target);
+      // 양쪽 노드가 모두 visible일 때만 링크 유지
+      return visibleIds.has(s) && visibleIds.has(t);
+    });
+
+    return { nodes, links };
+  }, [graph, filters]);
+
+  // 활성 노드로 카메라 이동 (✅ 필터 적용된 그래프 기준)
   useEffect(() => {
     if (!activeId || !fgRef.current) return;
     let tries = 0;
@@ -183,17 +221,18 @@ export default function ObsidianGraphView({
     const tick = () => {
       if (!fgRef.current) return;
       const node =
-        (graph?.nodes || []).find((n) => String(n.id) === String(activeId)) ||
-        null;
+        (displayGraph?.nodes || []).find(
+          (n) => String(n.id) === String(activeId)
+        ) || null;
       if (node && node.x != null && node.y != null) {
         fgRef.current.centerAt(node.x, node.y, 600);
-        fgRef.current.zoom(3, 600);
+        fgRef.current.zoom(2.3, 600);
       } else if (tries++ < maxTries) {
         requestAnimationFrame(tick);
       }
     };
     tick();
-  }, [activeId, graph, focusTick]);
+  }, [activeId, displayGraph, focusTick]);
 
   // 초기 줌 레벨 설정
   useEffect(() => {
@@ -238,7 +277,7 @@ export default function ObsidianGraphView({
           ref={fgRef}
           width={size.w}
           height={size.h}
-          graphData={graph}
+          graphData={displayGraph} // ✅ 필터 적용 그래프 사용
           d3VelocityDecay={0.35}
           linkColor={() => "rgba(255,255,255,0.18)"}
           linkDirectionalParticles={1}
@@ -249,10 +288,16 @@ export default function ObsidianGraphView({
             const isActive = node.id === activeId;
             const fontSize = Math.max(8, 4 / globalScale + (isActive ? 3 : 0));
 
-            // ✅ 타입별 색상
-            let color = "#6ee7b7"; // note/equation (green)
-            if (node.type === "tag") color = "#60a5fa"; // tag (blue)
-            if (node.type === "array") color = "#f59e0b"; // array (amber)
+            // 타입별 색상
+            let color = "#6ee7b7"; // 기본: equation / 일반 note (green)
+
+            if (node.type === "tag") {
+              color = "#60a5fa"; // Tag: 파란색
+            } else if (node.type === "array") {
+              color = "#f59e0b"; // Array (3D): 주황
+            } else if (node.type === "curve") {
+              color = "#e54848"; // Curve (3D · z-axis): 빨강
+            }
 
             ctx.beginPath();
             ctx.arc(node.x, node.y, isActive ? 6 : 4, 0, Math.PI * 2, false);
@@ -418,19 +463,33 @@ export default function ObsidianGraphView({
         )}
       </div>
 
-      {/* 범례 */}
+      {/* 범례 + 타입 토글 */}
       <div className="legend">
-        <div className="row">
-          <span className="dot note" /> Note (equation)
+        <div
+          className={`row toggle ${filters.note ? "on" : "off"}`}
+          onClick={() => toggleType("note")}
+        >
+          <span className="dot note" /> equation
         </div>
-        <div className="row">
-          {/* ✅ 배열 범례 추가 (dot 기본 스타일을 재사용, 색상만 인라인) */}
+        <div
+          className={`row toggle ${filters.array ? "on" : "off"}`}
+          onClick={() => toggleType("array")}
+        >
           <span className="dot" style={{ background: "#f59e0b" }} /> Array (3D)
         </div>
-        <div className="row">
+        <div
+          className={`row toggle ${filters.curve ? "on" : "off"}`}
+          onClick={() => toggleType("curve")}
+        >
+          <span className="dot curve" /> Curve (3D · z-axis)
+        </div>
+        <div
+          className={`row toggle ${filters.tag ? "on" : "off"}`}
+          onClick={() => toggleType("tag")}
+        >
           <span className="dot tag" /> Tag
         </div>
-        <div style={{ fontSize: 11, color: "#9aa4b2" }}>
+        <div style={{ fontSize: 11, color: "#9aa4b2", marginTop: 6 }}>
           • Left-click: select · Right-click: open in Studio
         </div>
       </div>

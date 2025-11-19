@@ -2,12 +2,36 @@
 import React, { useMemo, useRef, useState } from "react";
 import "../styles/EquationList.css";
 
+// EquationList.jsx 상단부 어딘가
+function Curve3DIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+      <g
+        stroke="currentColor"
+        strokeWidth="1.6"
+        fill="none"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {/* X-Y 축 */}
+        <polyline points="4,19 4,6 18,6" opacity="0.7" />
+        {/* 3D 곡선 */}
+        <path d="M5 16 C8 10 12 13 17 7" />
+        {/* Z축 느낌 (대각선) */}
+        <path d="M7 18 L11 22 L20 13" opacity="0.5" />
+      </g>
+    </svg>
+  );
+}
+
 export default function EquationList({
   items,
   activeId,
   query,
   setQuery,
   onSelect,
+  onUpdate, // ✅ 추가
+  onDelete, // ✅ 추가
 }) {
   // ---- helpers -------------------------------------------------
   const dimsOf = (note) => {
@@ -18,7 +42,11 @@ export default function EquationList({
     return `${X}×${Y}×${Z}`;
   };
 
-  const iconOf = (type) => (type === "array3d" ? "⬢" : "ƒx");
+  const iconOf = (type) => {
+    if (type === "array3d") return "⬢";
+    if (type === "curve3d") return ""; // 아이콘은 별도 컴포넌트로 렌더
+    return "ƒx";
+  };
 
   // ---- filtering (수식 + 배열 모두 검색) -------------------------
   const filtered = useMemo(() => {
@@ -50,6 +78,44 @@ export default function EquationList({
   const handleCancel = () => {
     setQuery("");
     setSearchMode(false);
+  };
+
+  // ---- 인라인 편집 상태 ----------------------------------------
+  const [editing, setEditing] = useState(null); // { id, title, formula, tags }
+
+  const startEdit = (note) => {
+    setEditing({
+      id: note.id,
+      title: note.title || "",
+      formula: note.type === "equation" ? note.formula || "" : "",
+      tags: (note.tags || []).join(", "),
+    });
+  };
+
+  const cancelEdit = () => setEditing(null);
+
+  const saveEdit = () => {
+    if (!editing || !onUpdate) return;
+    const note = items.find((n) => n.id === editing.id);
+    if (!note) return;
+
+    const tags =
+      editing.tags
+        .split(/[\s,]+/)
+        .map((t) => t.trim())
+        .filter(Boolean) || [];
+
+    const patch = {
+      title: editing.title.trim() || note.title,
+      tags,
+    };
+
+    if (note.type === "equation") {
+      patch.formula = (editing.formula || "").trim() || note.formula;
+    }
+
+    onUpdate(editing.id, patch);
+    setEditing(null);
   };
 
   // ---- render ---------------------------------------------------
@@ -87,8 +153,13 @@ export default function EquationList({
           }}
           onClick={() => (window.location.href = "/")}
         >
-          <img src="/Logo.png" alt="Logo" className="logo-image" />
-          <span className="logo-text">GraphMind</span>
+          <div className="brand">
+            <img className="brand-logo" src="/Logo.png" alt="GraphMind logo" />
+            <div className="brand-text">
+              <div className="brand-name">GraphMind</div>
+              <div className="brand-sub">Math. Graph. AI</div>
+            </div>
+          </div>
         </div>
 
         {/* 검색 아이콘 */}
@@ -129,7 +200,9 @@ export default function EquationList({
         {/* 검색 입력 */}
         <div
           className={
-            searchMode ? "search-fade fade-in-right" : "search-fade fade-out-left"
+            searchMode
+              ? "search-fade fade-in-right"
+              : "search-fade fade-out-left"
           }
           style={{
             flex: 1,
@@ -192,32 +265,49 @@ export default function EquationList({
       <div className="vault-list">
         {filtered.map((note) => {
           const isArr = note.type === "array3d";
+          const isCurve = note.type === "curve3d";
           const dims = isArr ? dimsOf(note) : null;
-          const subtitle = isArr ? `Size: ${dims}` : (note.formula || "");
-          const when = new Date(note.updatedAt || note.createdAt || Date.now()).toLocaleString();
+          const subtitle = isArr
+            ? `Size: ${dims}`
+            : isCurve
+            ? `samples: ${note.samples ?? "-"}`
+            : note.formula || "";
+          const when = new Date(
+            note.updatedAt || note.createdAt || Date.now()
+          ).toLocaleString();
+          const isActive = note.id === activeId;
+          const isEditing = editing && editing.id === note.id;
+          const canEdit = typeof onUpdate === "function";
+          const canDelete = typeof onDelete === "function";
 
           return (
             <div
               key={note.id}
-              className={"vault-item" + (note.id === activeId ? " active" : "")}
+              className={"vault-item" + (isActive ? " active" : "")}
               onClick={() => onSelect(note.id)}
             >
               <div className="item-head">
-                <div className={`item-icon ${isArr ? "arr" : "eq"}`}>
-                  {iconOf(note.type)}
+                <div
+                  className={`item-icon ${
+                    isArr ? "arr" : isCurve ? "curve" : "eq"
+                  }`}
+                >
+                  {isCurve ? <Curve3DIcon /> : iconOf(note.type)}
                 </div>
                 <div className="item-title-wrap">
                   <div className="title-row">
                     <div className="title">
                       {note.title || (isArr ? "3D Array" : "Equation")}
                     </div>
-                    <span className={`type-pill ${isArr ? "pill-arr" : "pill-eq"}`}>
-                      {isArr ? "array3d" : "equation"}
+                    <span
+                      className={`type-pill ${
+                        isArr ? "pill-arr" : isCurve ? "pill-curve" : "pill-eq"
+                      }`}
+                    >
+                      {isArr ? "array3d" : isCurve ? "curve3d" : "equation"}
                     </span>
                   </div>
-                  <div className={isArr ? "dims" : "formula"}>
-                    {subtitle}
-                  </div>
+                  <div className={isArr ? "dims" : "formula"}>{subtitle}</div>
                 </div>
               </div>
 
@@ -232,11 +322,196 @@ export default function EquationList({
                   </span>
                 ))}
               </div>
+
+              {/* 편집 / 삭제 액션 */}
+              {(canEdit || canDelete) && (
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 6,
+                    marginTop: 6,
+                    justifyContent: "flex-end",
+                  }}
+                >
+                  {canEdit && (
+                    <button
+                      style={{
+                        fontSize: 11,
+                        padding: "2px 8px",
+                        borderRadius: 999,
+                        border: "1px solid rgba(255,255,255,0.18)",
+                        background: "rgba(15,23,42,0.6)",
+                        color: "#e5e7eb",
+                        cursor: "pointer",
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        startEdit(note);
+                      }}
+                    >
+                      편집
+                    </button>
+                  )}
+                  {canDelete && (
+                    <button
+                      style={{
+                        fontSize: 11,
+                        padding: "2px 8px",
+                        borderRadius: 999,
+                        border: "1px solid rgba(239,68,68,0.7)",
+                        background: "rgba(239,68,68,0.15)",
+                        color: "#fecaca",
+                        cursor: "pointer",
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDelete && onDelete(note.id);
+                      }}
+                    >
+                      삭제
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* 인라인 편집 패널 */}
+              {canEdit && isEditing && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    padding: 8,
+                    borderRadius: 10,
+                    border: "1px solid rgba(148,163,184,0.4)",
+                    background: "rgba(15,23,42,0.9)",
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div
+                    style={{ display: "flex", flexDirection: "column", gap: 6 }}
+                  >
+                    <label style={{ fontSize: 11, color: "#9aa4b2" }}>
+                      제목
+                      <input
+                        value={editing.title}
+                        onChange={(e) =>
+                          setEditing((prev) => ({
+                            ...prev,
+                            title: e.target.value,
+                          }))
+                        }
+                        style={{
+                          marginTop: 2,
+                          width: "100%",
+                          fontSize: 12,
+                          padding: "4px 6px",
+                          borderRadius: 6,
+                          border: "1px solid rgba(148,163,184,0.7)",
+                          background: "#020617",
+                          color: "#e5e7eb",
+                          outline: "none",
+                        }}
+                      />
+                    </label>
+
+                    {note.type === "equation" && (
+                      <label style={{ fontSize: 11, color: "#9aa4b2" }}>
+                        수식
+                        <input
+                          value={editing.formula}
+                          onChange={(e) =>
+                            setEditing((prev) => ({
+                              ...prev,
+                              formula: e.target.value,
+                            }))
+                          }
+                          style={{
+                            marginTop: 2,
+                            width: "100%",
+                            fontSize: 12,
+                            padding: "4px 6px",
+                            borderRadius: 6,
+                            border: "1px solid rgba(148,163,184,0.7)",
+                            background: "#020617",
+                            color: "#e5e7eb",
+                            outline: "none",
+                            fontFamily:
+                              'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
+                          }}
+                        />
+                      </label>
+                    )}
+
+                    <label style={{ fontSize: 11, color: "#9aa4b2" }}>
+                      태그 (쉼표/공백 구분)
+                      <input
+                        value={editing.tags}
+                        onChange={(e) =>
+                          setEditing((prev) => ({
+                            ...prev,
+                            tags: e.target.value,
+                          }))
+                        }
+                        style={{
+                          marginTop: 2,
+                          width: "100%",
+                          fontSize: 12,
+                          padding: "4px 6px",
+                          borderRadius: 6,
+                          border: "1px solid rgba(148,163,184,0.7)",
+                          background: "#020617",
+                          color: "#e5e7eb",
+                          outline: "none",
+                        }}
+                      />
+                    </label>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "flex-end",
+                      gap: 6,
+                      marginTop: 8,
+                    }}
+                  >
+                    <button
+                      style={{
+                        fontSize: 11,
+                        padding: "3px 10px",
+                        borderRadius: 999,
+                        border: "1px solid rgba(148,163,184,0.7)",
+                        background: "transparent",
+                        color: "#e5e7eb",
+                        cursor: "pointer",
+                      }}
+                      onClick={cancelEdit}
+                    >
+                      취소
+                    </button>
+                    <button
+                      style={{
+                        fontSize: 11,
+                        padding: "3px 10px",
+                        borderRadius: 999,
+                        border: "1px solid rgba(34,197,94,0.9)",
+                        background: "rgba(34,197,94,0.85)",
+                        color: "#022c22",
+                        cursor: "pointer",
+                      }}
+                      onClick={saveEdit}
+                    >
+                      저장
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}
         {filtered.length === 0 && (
-          <div style={{ opacity: 0.6, padding: 12, fontSize: 13 }}>No results</div>
+          <div style={{ opacity: 0.6, padding: 12, fontSize: 13 }}>
+            No results
+          </div>
         )}
       </div>
     </div>

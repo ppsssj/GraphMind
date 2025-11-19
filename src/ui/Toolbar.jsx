@@ -12,6 +12,9 @@ export default function Toolbar({
   setXmin,
   setXmax,
   onResampleDomain,
+  // new props for left panel toggle
+  showLeftPanel = true,
+  onToggleLeftPanel = () => {},
 }) {
   return (
     <div className="toolbar">
@@ -60,6 +63,14 @@ export default function Toolbar({
         />
         <button className="toolbar-btn ghost" onClick={onResampleDomain} title="도메인 변경 적용">
           Resample
+        </button>
+        <button
+          className="toolbar-btn ghost"
+          style={{ marginLeft: 12 }}
+          onClick={onToggleLeftPanel}
+          title={showLeftPanel ? "Hide Left Panel" : "Show Left Panel"}
+        >
+          {showLeftPanel ? "Hide Left" : "Show Left"}
         </button>
       </div>
     </div>

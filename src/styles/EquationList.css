@@ -123,7 +123,7 @@
 /* 활성 아이템 */
 .vault-item.active {
   background: var(--active);
-  border-color: rgba(110, 231, 183, 0.5);
+  border-color: rgba(96, 58, 189, 0.5);
   box-shadow: 0 0 0 4px rgba(110, 231, 183, 0.12);
 }
 
@@ -294,9 +294,9 @@
   border-color: rgba(110, 231, 183, 0.35);
 }
 .pill-arr {
-  color: #bfe0ff;
-  background: rgba(96, 165, 250, 0.12);
-  border-color: rgba(96, 165, 250, 0.35);
+  color: rgb(245, 158, 11);
+  background-color: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.6);
 }
 
 /* 수식/배열 서브라인 */
@@ -306,4 +306,37 @@
   line-height: 1.35;
   color: #c6d0dd;
   opacity: 0.95;
+}
+
+/* array3d 아이콘 (주황 계열) */
+.item-icon.arr {
+  color: rgb(245, 158, 11);                           /* 아이콘 색 */
+  background-color: rgba(245, 158, 11, 0.08);         /* 은은한 주황 배경 */
+  border: 1px solid rgba(245, 158, 11, 0.6);          /* 살짝 진한 테두리 */
+}
+
+/* hover 시 약간 강조해도 됨 */
+.item-icon.arr:hover {
+  background-color: rgba(245, 158, 11, 0.15);
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.4);
+}
+
+
+/* curve3d 아이콘 전용 스타일 */
+.item-icon.curve {
+  color: #e54848;              /* 아이콘 선 색 (currentColor) */
+  background-color: rgba(229, 72, 72, 0.08);  /* 살짝 붉은 배경 */
+  border: 1px solid rgba(229, 72, 72, 0.6);   /* 테두리도 빨간 계열 */
+}
+
+/* 혹시 hover 효과도 줄 거라면 */
+.item-icon.curve:hover {
+  background-color: rgba(229, 72, 72, 0.14);
+  box-shadow: 0 0 0 1px rgba(229, 72, 72, 0.4);
+}
+
+.pill-curve {
+  color: #e54848;
+  background-color: rgba(229, 72, 72, 0.08);
+  border-color: rgba(229, 72, 72, 0.6);
 }

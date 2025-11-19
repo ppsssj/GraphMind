@@ -23,7 +23,7 @@ const TYPE_META = [
 export default function NewResourceModal({ onClose, onCreate }) {
   const [type, setType] = useState("equation");
   const [title, setTitle] = useState("");
-
+  const [tagInput, setTagInput] = useState("");
   // 공통 해상도/범위 기본값
   const [samples, setSamples] = useState(200);
 
@@ -83,17 +83,19 @@ export default function NewResourceModal({ onClose, onCreate }) {
       return;
     }
 
+    // ✅ 태그 문자열 => 배열로 변환
+    const tags = tagInput
+      .split(/[\s,]+/) // 공백/쉼표 기준 split
+      .map((t) => t.trim())
+      .filter(Boolean); // 빈 문자열 제거
+
     // 타입별 payload 구성
     try {
       if (type === "equation") {
-        const [xmin, xmax] = clampRange(
-          +xRange2D.min,
-          +xRange2D.max,
-          -10,
-          10
-        );
+        const [xmin, xmax] = clampRange(+xRange2D.min, +xRange2D.max, -10, 10);
         onCreate({
           type,
+          tags,
           title,
           formula: String(formula2D || "").trim(),
           xRange: [xmin, xmax],
@@ -111,7 +113,12 @@ export default function NewResourceModal({ onClose, onCreate }) {
           samples: Math.max(30, +samples3D || 120),
         });
       } else if (type === "curve3d") {
-        const [tmin, tmax] = clampRange(+tRange.min, +tRange.max, 0, 2 * Math.PI);
+        const [tmin, tmax] = clampRange(
+          +tRange.min,
+          +tRange.max,
+          0,
+          2 * Math.PI
+        );
         onCreate({
           type,
           title,
@@ -122,8 +129,18 @@ export default function NewResourceModal({ onClose, onCreate }) {
           samples: Math.max(100, +curveSamples || 400),
         });
       } else if (type === "surfaceParam") {
-        const [umin, umax] = clampRange(+uRange.min, +uRange.max, 0, 2 * Math.PI);
-        const [vmin, vmax] = clampRange(+vRange.min, +vRange.max, 0, 2 * Math.PI);
+        const [umin, umax] = clampRange(
+          +uRange.min,
+          +uRange.max,
+          0,
+          2 * Math.PI
+        );
+        const [vmin, vmax] = clampRange(
+          +vRange.min,
+          +vRange.max,
+          0,
+          2 * Math.PI
+        );
         onCreate({
           type,
           title,
@@ -177,7 +194,9 @@ export default function NewResourceModal({ onClose, onCreate }) {
   // 타입 버튼 렌더링
   const TypeButtons = useMemo(
     () => (
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+      <div
+        style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}
+      >
         {TYPE_META.map((t) => (
           <button
             key={t.key}
@@ -200,7 +219,10 @@ export default function NewResourceModal({ onClose, onCreate }) {
 
   return (
     <div className="vault-modal">
-      <div className="vault-modal-content" style={{ width: 560, maxWidth: "95vw" }}>
+      <div
+        className="vault-modal-content"
+        style={{ width: 560, maxWidth: "95vw" }}
+      >
         <h3 style={{ marginTop: 0 }}>새로 만들기</h3>
 
         {TypeButtons}
@@ -212,6 +234,17 @@ export default function NewResourceModal({ onClose, onCreate }) {
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="새 리소스"
+              style={{ width: "100%" }}
+            />
+          </label>
+
+          {/* ✅ 태그 입력 추가 */}
+          <label>
+            태그 (쉼표 또는 공백으로 구분)
+            <input
+              value={tagInput}
+              onChange={(e) => setTagInput(e.target.value)}
+              placeholder="예: 미적분, 예제, 2D"
               style={{ width: "100%" }}
             />
           </label>
@@ -662,7 +695,7 @@ export default function NewResourceModal({ onClose, onCreate }) {
                 value={json}
                 onChange={(e) => setJson(e.target.value)}
                 rows={8}
-                placeholder='예) [[[0,1],[1,0]],[[1,1],[0,0]]]'
+                placeholder="예) [[[0,1],[1,0]],[[1,1],[0,0]]]"
                 style={{ width: "100%", fontFamily: "monospace" }}
               />
             </>
@@ -677,8 +710,12 @@ export default function NewResourceModal({ onClose, onCreate }) {
             marginTop: 14,
           }}
         >
-          <button onClick={onClose} className="vault-btn">취소</button>
-          <button onClick={submit} className="vault-btn">생성</button>
+          <button onClick={onClose} className="vault-btn">
+            취소
+          </button>
+          <button onClick={submit} className="vault-btn">
+            생성
+          </button>
         </div>
       </div>
     </div>

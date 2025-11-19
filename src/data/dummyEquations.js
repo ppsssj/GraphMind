@@ -1,6 +1,6 @@
 // src/data/dummyEquations.js
 
-export const dummyEquations = [ 
+export const dummyEquations = [
   {
     id: "eq1",
     type: "equation",
@@ -127,4 +127,53 @@ export const dummyArrays3D = [
   },
 ];
 
-export const dummyResources = [...dummyEquations, ...dummyArrays3D];
+// ✅ 3D 공간 곡선 더미 데이터
+export const dummyCurves3D = [
+  {
+    id: "c3d1",
+    type: "curve3d",
+    title: "3D Helix",
+    // Studio → makeInitialTabState에서 curvePayload.x / y / z 로 사용
+    x: "x(t) = cos(t)",
+    y: "y(t) = sin(t)",
+    z: "z(t) = 0.2 * t",
+    tRange: [0, 6 * Math.PI],
+    samples: 600,
+    tags: ["3d", "curve", "helix"],
+    links: [],
+    updatedAt: "2025-09-05T10:00:00Z",
+  },
+  {
+    id: "c3d2",
+    type: "curve3d",
+    title: "Lissajous Knot",
+    x: "x(t) = sin(3 * t)",
+    y: "y(t) = sin(4 * t + pi/2)",
+    z: "z(t) = sin(5 * t)",
+    tRange: [0, 2 * Math.PI],
+    samples: 800,
+    tags: ["3d", "curve", "lissajous"],
+    links: [],
+    updatedAt: "2025-09-05T10:05:00Z",
+  },
+  {
+    id: "c3d3",
+    type: "curve3d",
+    title: "Wavy Ribbon",
+    x: "x(t) = t",
+    y: "y(t) = sin(t)",
+    z: "z(t) = 0.5 * cos(2 * t)",
+    tRange: [-4 * Math.PI, 4 * Math.PI],
+    samples: 700,
+    tags: ["3d", "curve", "wave"],
+    links: [],
+    updatedAt: "2025-09-05T10:10:00Z",
+  },
+];
+
+// Vault에서 한 번에 쓰기 위한 통합 리소스
+export const dummyResources = [
+  ...dummyEquations,
+  ...dummyArrays3D,
+  ...dummyCurves3D,
+];
