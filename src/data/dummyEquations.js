@@ -1,5 +1,6 @@
 // src/data/dummyEquations.js
 
+// 2D 수식 더미
 export const dummyEquations = [
   {
     id: "eq1",
@@ -48,6 +49,7 @@ export const dummyEquations = [
   },
 ];
 
+// 3D 배열 더미
 export const dummyArrays3D = [
   {
     id: "arr1",
@@ -127,13 +129,12 @@ export const dummyArrays3D = [
   },
 ];
 
-// ✅ 3D 공간 곡선 더미 데이터
+// 3D 곡선 더미
 export const dummyCurves3D = [
   {
     id: "c3d1",
     type: "curve3d",
     title: "3D Helix",
-    // Studio → makeInitialTabState에서 curvePayload.x / y / z 로 사용
     x: "x(t) = cos(t)",
     y: "y(t) = sin(t)",
     z: "z(t) = 0.2 * t",
@@ -171,9 +172,51 @@ export const dummyCurves3D = [
   },
 ];
 
+// ✅ 3D 곡면(z = f(x,y)) 더미
+export const dummySurfaces3D = [
+  {
+    id: "s3d1",
+    type: "surface3d",
+    title: "Saddle Surface",
+    // Vault / LeftPanel / Studio 모두 expr 또는 formula를 봄
+    expr: "x^2 - y^2",
+    xRange: [-3, 3],
+    yRange: [-3, 3],
+    samples: 80,
+    tags: ["3d", "surface", "saddle"],
+    links: ["eq1"],
+    updatedAt: "2025-09-06T09:00:00Z",
+  },
+  {
+    id: "s3d2",
+    type: "surface3d",
+    title: "Gaussian Hill",
+    expr: "exp(-(x^2 + y^2))",
+    xRange: [-4, 4],
+    yRange: [-4, 4],
+    samples: 96,
+    tags: ["3d", "surface", "gaussian"],
+    links: ["eq5"],
+    updatedAt: "2025-09-06T09:10:00Z",
+  },
+  {
+    id: "s3d3",
+    type: "surface3d",
+    title: "Ripple Surface",
+    expr: "sin(sqrt(x^2 + y^2)) / (1 + 0.3 * (x^2 + y^2))",
+    xRange: [-6, 6],
+    yRange: [-6, 6],
+    samples: 100,
+    tags: ["3d", "surface", "wave"],
+    links: ["eq2"],
+    updatedAt: "2025-09-06T09:20:00Z",
+  },
+];
+
 // Vault에서 한 번에 쓰기 위한 통합 리소스
 export const dummyResources = [
   ...dummyEquations,
   ...dummyArrays3D,
   ...dummyCurves3D,
+  ...dummySurfaces3D,
 ];

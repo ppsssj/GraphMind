@@ -25,6 +25,7 @@ export default function ObsidianGraphView({
     note: true, // equation / 일반 노트
     array: true, // Array (3D)
     curve: true, // Curve (3D · z-axis)
+    surface: true, // Surface (3D · z=f(x,y))
     tag: true, // Tag
   });
 
@@ -32,17 +33,18 @@ export default function ObsidianGraphView({
     setFilters((prev) => ({ ...prev, [type]: !prev[type] }));
   };
 
-  // === 전체 그래프 (정적) - 수식 + 배열 + curve3d 동시 처리 ===
+  // === 전체 그래프 (정적) - 수식 + 배열 + curve3d + surface3d 동시 처리 ===
   const fullGraph = useMemo(() => {
     const nodes = [];
     const links = [];
     const noteIds = new Set(notes.map((n) => n.id));
 
-    // 노트(수식/배열/curve3d) 노드
+    // 노트(수식/배열/curve3d/surface3d) 노드
     notes.forEach((n) => {
       let type = "note";
       if (n.type === "array3d") type = "array";
-      if (n.type === "curve3d") type = "curve"; // curve3d 전용 타입
+      if (n.type === "curve3d") type = "curve";
+      if (n.type === "surface3d" || n.type === "equation3d") type = "surface";
 
       nodes.push({
         id: n.id,
@@ -64,7 +66,7 @@ export default function ObsidianGraphView({
       });
     });
 
-    // 노트↔노트 링크 (수식-수식, 수식-배열, 배열-배열, curve 포함)
+    // 노트↔노트 링크
     notes.forEach((n) => {
       (n.links || []).forEach((lid) => {
         if (noteIds.has(lid)) links.push({ source: n.id, target: lid });
@@ -86,13 +88,13 @@ export default function ObsidianGraphView({
   }, []);
 
   // === 타임랩스 전용 상태 ===
-  const [graph, setGraph] = useState({ nodes: [], links: [] }); // 타임랩스/전체 기준 원본 그래프
+  const [graph, setGraph] = useState({ nodes: [], links: [] });
   const [isPlaying, setIsPlaying] = useState(false);
   const [cursor, setCursor] = useState(0);
   const [speed, setSpeed] = useState(1);
   const [showControls, setShowControls] = useState(false);
 
-  // notes.updatedAt 기반 타임라인 (배열, curve3d 포함)
+  // notes.updatedAt 기반 타임라인 (배열, curve3d, surface3d 포함)
   const timeline = useMemo(() => {
     const steps = [];
     const safeTime = (t) => {
@@ -109,6 +111,8 @@ export default function ObsidianGraphView({
       let nodeType = "note";
       if (n.type === "array3d") nodeType = "array";
       if (n.type === "curve3d") nodeType = "curve";
+      if (n.type === "surface3d" || n.type === "equation3d")
+        nodeType = "surface";
 
       steps.push({
         t,
@@ -205,7 +209,6 @@ export default function ObsidianGraphView({
     const links = (graph.links || []).filter((l) => {
       const s = String(l.source?.id || l.source);
       const t = String(l.target?.id || l.target);
-      // 양쪽 노드가 모두 visible일 때만 링크 유지
       return visibleIds.has(s) && visibleIds.has(t);
     });
 
@@ -237,7 +240,7 @@ export default function ObsidianGraphView({
   // 초기 줌 레벨 설정
   useEffect(() => {
     if (fgRef.current) {
-      fgRef.current.zoom(0.5, 600); // 초기 줌 레벨 설정
+      fgRef.current.zoom(0.5, 600);
     }
   }, []);
 
@@ -277,7 +280,7 @@ export default function ObsidianGraphView({
           ref={fgRef}
           width={size.w}
           height={size.h}
-          graphData={displayGraph} // ✅ 필터 적용 그래프 사용
+          graphData={displayGraph}
           d3VelocityDecay={0.35}
           linkColor={() => "rgba(255,255,255,0.18)"}
           linkDirectionalParticles={1}
@@ -297,6 +300,8 @@ export default function ObsidianGraphView({
               color = "#f59e0b"; // Array (3D): 주황
             } else if (node.type === "curve") {
               color = "#e54848"; // Curve (3D · z-axis): 빨강
+            } else if (node.type === "surface") {
+              color = "#a855f7"; // Surface (3D · z=f(x,y)): 보라
             }
 
             ctx.beginPath();
@@ -482,6 +487,16 @@ export default function ObsidianGraphView({
           onClick={() => toggleType("curve")}
         >
           <span className="dot curve" /> Curve (3D · z-axis)
+        </div>
+        <div
+          className={`row toggle ${filters.surface ? "on" : "off"}`}
+          onClick={() => toggleType("surface")}
+        >
+          <span
+            className="dot"
+            style={{ background: "#a855f7", boxShadow: "0 0 4px #a855f7aa" }}
+          />{" "}
+          Surface (3D · z=f(x,y))
         </div>
         <div
           className={`row toggle ${filters.tag ? "on" : "off"}`}

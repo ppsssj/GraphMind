@@ -340,3 +340,17 @@
   background-color: rgba(229, 72, 72, 0.08);
   border-color: rgba(229, 72, 72, 0.6);
 }
+
+/* surface3d 전용 아이콘 배경 */
+.item-icon.surface {
+  background: rgba(168, 85, 247, 0.12); /* 보라 글로우 */
+  color: #e9d5ff;
+  border: 1px solid rgba(168, 85, 247, 0.7);
+}
+
+/* surface3d 타입 pill */
+.type-pill.pill-surface {
+  border-color: rgba(168, 85, 247, 0.8);
+  background: rgba(168, 85, 247, 0.16);
+  color: #f5e9ff;
+}

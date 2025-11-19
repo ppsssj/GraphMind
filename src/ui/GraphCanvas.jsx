@@ -1,3 +1,4 @@
+// GraphCanvas.jsx equation graph component
 import { useMemo, useRef, useState, useEffect } from "react";
 import { Canvas } from "@react-three/fiber";
 import {

@@ -3,17 +3,17 @@ import React, { useMemo, useState } from "react";
 /**
  * onCreate(payload) 형태 (타입별 payload 예시)
  *
- * 1) equation (2D 수식):      { type:"equation",      title, formula: "x^2 + 1", xRange:[-10,10], samples: 200 }
- * 2) equation3d (3D 곡면):    { type:"equation3d",    title, formula: "sin(x)*cos(y)", xRange:[-10,10], yRange:[-10,10], samples: 120 }
- * 3) curve3d (공간 곡선):     { type:"curve3d",       title, x:"cos(t)", y:"sin(t)", z:"t", tRange:[0, 6.28], samples: 400 }
- * 4) surfaceParam (매개 곡면): { type:"surfaceParam",  title, x:"(2+cos v)*cos u", y:"(2+cos v)*sin u", z:"sin v", uRange:[0,6.28], vRange:[0,6.28], uSamples: 80, vSamples: 40 }
- * 5) vectorField (벡터장):    { type:"vectorField",   title, P:"-y", Q:"x", R:"0", xRange:[-5,5], yRange:[-5,5], zRange:[-5,5], step: 2 }
- * 6) array3d (3D 배열):       { type:"array3d",       title, content: number[][][], dims?:{x,y,z} }
+ * 1) equation (2D 수식):      { type:"equation",      title, formula:"x^2 + 1", xRange:[-10,10], samples:200, tags:string[] }
+ * 2) surface3d (3D 곡면):     { type:"surface3d",     title, formula:"sin(x)*cos(y)", xRange:[-10,10], yRange:[-10,10], samples:120, tags:string[] }
+ * 3) curve3d (공간 곡선):     { type:"curve3d",       title, x:"cos(t)", y:"sin(t)", z:"t", tRange:[0,6.28], samples:400, tags:string[] }
+ * 4) surfaceParam (매개 곡면): { type:"surfaceParam",  title, x:"(2+cos v)*cos u", y:"(2+cos v)*sin u", z:"sin v", ... , tags:string[] }
+ * 5) vectorField (벡터장):    { type:"vectorField",   title, P:"-y", Q:"x", R:"0", ... , tags:string[] }
+ * 6) array3d (3D 배열):       { type:"array3d",       title, content:number[][][], dims?:{x,y,z}, tags:string[] }
  */
 
 const TYPE_META = [
   { key: "equation", label: "2D 수식 (y=f(x))" },
-  { key: "equation3d", label: "3D 곡면 (z=f(x,y))" },
+  { key: "surface3d", label: "3D 곡면 (z=f(x,y))" },
   { key: "curve3d", label: "3D 공간 곡선 (x(t), y(t), z(t))" },
   { key: "surfaceParam", label: "매개변수 곡면 (x(u,v), y(u,v), z(u,v))" },
   { key: "vectorField", label: "벡터장 F(x,y,z)" },
@@ -24,6 +24,7 @@ export default function NewResourceModal({ onClose, onCreate }) {
   const [type, setType] = useState("equation");
   const [title, setTitle] = useState("");
   const [tagInput, setTagInput] = useState("");
+
   // 공통 해상도/범위 기본값
   const [samples, setSamples] = useState(200);
 
@@ -83,13 +84,12 @@ export default function NewResourceModal({ onClose, onCreate }) {
       return;
     }
 
-    // ✅ 태그 문자열 => 배열로 변환
+    // ✅ 태그 문자열 => 배열로 변환 (모든 타입 공통)
     const tags = tagInput
-      .split(/[\s,]+/) // 공백/쉼표 기준 split
+      .split(/[\s,]+/)
       .map((t) => t.trim())
-      .filter(Boolean); // 빈 문자열 제거
+      .filter(Boolean);
 
-    // 타입별 payload 구성
     try {
       if (type === "equation") {
         const [xmin, xmax] = clampRange(+xRange2D.min, +xRange2D.max, -10, 10);
@@ -101,11 +101,12 @@ export default function NewResourceModal({ onClose, onCreate }) {
           xRange: [xmin, xmax],
           samples: Math.max(50, +samples || 200),
         });
-      } else if (type === "equation3d") {
+      } else if (type === "surface3d") {
         const [xmin, xmax] = clampRange(+xRange3D.min, +xRange3D.max, -10, 10);
         const [ymin, ymax] = clampRange(+yRange3D.min, +yRange3D.max, -10, 10);
         onCreate({
           type,
+          tags,
           title,
           formula: String(formula3D || "").trim(),
           xRange: [xmin, xmax],
@@ -121,6 +122,7 @@ export default function NewResourceModal({ onClose, onCreate }) {
         );
         onCreate({
           type,
+          tags,
           title,
           x: String(curveX || "").trim(),
           y: String(curveY || "").trim(),
@@ -143,6 +145,7 @@ export default function NewResourceModal({ onClose, onCreate }) {
         );
         onCreate({
           type,
+          tags,
           title,
           x: String(surfX || "").trim(),
           y: String(surfY || "").trim(),
@@ -158,6 +161,7 @@ export default function NewResourceModal({ onClose, onCreate }) {
         const [zmin, zmax] = clampRange(+zRangeVF.min, +zRangeVF.max, -5, 5);
         onCreate({
           type,
+          tags,
           title,
           P: String(P || "").trim(),
           Q: String(Q || "").trim(),
@@ -183,7 +187,7 @@ export default function NewResourceModal({ onClose, onCreate }) {
         } else {
           content = buildZeros(dims.x, dims.y, dims.z);
         }
-        onCreate({ type, title, content, dims });
+        onCreate({ type, tags, title, content, dims });
       }
     } catch (err) {
       console.error(err);
@@ -191,7 +195,6 @@ export default function NewResourceModal({ onClose, onCreate }) {
     }
   };
 
-  // 타입 버튼 렌더링
   const TypeButtons = useMemo(
     () => (
       <div
@@ -238,13 +241,13 @@ export default function NewResourceModal({ onClose, onCreate }) {
             />
           </label>
 
-          {/* ✅ 태그 입력 추가 */}
+          {/* ✅ 태그 입력 */}
           <label>
             태그 (쉼표 또는 공백으로 구분)
             <input
               value={tagInput}
               onChange={(e) => setTagInput(e.target.value)}
-              placeholder="예: 미적분, 예제, 2D"
+              placeholder="예: 미적분, 예제, 3D"
               style={{ width: "100%" }}
             />
           </label>
@@ -298,7 +301,7 @@ export default function NewResourceModal({ onClose, onCreate }) {
             </>
           )}
 
-          {type === "equation3d" && (
+          {type === "surface3d" && (
             <>
               <label>
                 수식 (z = f(x, y))

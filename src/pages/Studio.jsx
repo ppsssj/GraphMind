@@ -7,6 +7,7 @@ import Toolbar from "../ui/Toolbar";
 import GraphView from "../ui/GraphView";
 import Array3DView from "../ui/Array3DView";
 import Curve3DView from "../ui/Curve3DView";
+import Surface3DView from "../ui/Surface3DView";
 import { dummyEquations, dummyResources } from "../data/dummyEquations";
 import "../styles/Studio.css";
 import AIPanel from "../components/ai/AIPanel";
@@ -130,7 +131,10 @@ export default function Studio() {
   // Vault에서 온 경우인지 / 어떤 노트에서 왔는지
   const fromVault = location.state?.from === "vault";
   const initialVaultId =
-    fromVault && (initialType === "equation" || initialType === "curve3d") // ✅ curve3d도 vaultId 연결
+    fromVault &&
+    (initialType === "equation" ||
+      initialType === "curve3d" ||
+      initialType === "surface3d")
       ? location.state?.id ?? null
       : null;
 
@@ -150,6 +154,23 @@ export default function Studio() {
             6.283185307179586, // 2π 정도
           samples:
             location.state?.curve3d?.samples ?? location.state?.samples ?? 400,
+        }
+      : undefined;
+
+  // ✅ surface3d 초기 파라미터
+  const initialSurface3d =
+    initialType === "surface3d"
+      ? {
+          expr:
+            location.state?.surface3d?.expr ??
+            location.state?.expr ??
+            "sin(x) * cos(y)",
+          xMin: location.state?.surface3d?.xMin ?? location.state?.xMin ?? -5,
+          xMax: location.state?.surface3d?.xMax ?? location.state?.xMax ?? 5,
+          yMin: location.state?.surface3d?.yMin ?? location.state?.yMin ?? -5,
+          yMax: location.state?.surface3d?.yMax ?? location.state?.yMax ?? 5,
+          nx: location.state?.surface3d?.nx ?? location.state?.nx ?? 80,
+          ny: location.state?.surface3d?.ny ?? location.state?.ny ?? 80,
         }
       : undefined;
 
@@ -197,6 +218,7 @@ export default function Studio() {
       equation: initialType === "equation" ? initialFormula : undefined,
       content: initialType === "array3d" ? initialContent : undefined,
       curve3d: initialType === "curve3d" ? initialCurve3d : undefined, // ✅ 추가
+      surface3d: initialType === "surface3d" ? initialSurface3d : undefined,
       xmin: -3,
       xmax: 3,
       degree: 3,
@@ -326,8 +348,10 @@ export default function Studio() {
       const type = tabType || "equation";
       const eq = type === "equation" ? normalizeFormula(raw ?? "x") : undefined;
 
-      // ✅ curve3d 초기값 (다양한 리소스 스키마를 통합하여 xExpr/yExpr/zExpr/tMin/tMax/samples 형태로 만듦)
       let curve3dInit = undefined;
+      let surface3dInit = undefined;
+
+      // ✅ curve3d 초기값
       if (type === "curve3d") {
         const payload =
           tabContent && typeof tabContent === "object"
@@ -349,11 +373,48 @@ export default function Studio() {
         curve3dInit = { xExpr, yExpr, zExpr, tMin, tMax, samples };
       }
 
+      // ✅ surface3d 초기값 (z = f(x,y))
+      if (type === "surface3d") {
+        const payload =
+          tabContent && typeof tabContent === "object"
+            ? tabContent
+            : raw && typeof raw === "object"
+            ? raw
+            : {};
+
+        const expr =
+          payload.expr ?? payload.zExpr ?? payload.formula ?? "sin(x) * cos(y)";
+
+        const xRange = payload.xRange;
+        const yRange = payload.yRange;
+
+        const xMin =
+          payload.xMin ?? (Array.isArray(xRange) ? xRange[0] : undefined) ?? -5;
+        const xMax =
+          payload.xMax ?? (Array.isArray(xRange) ? xRange[1] : undefined) ?? 5;
+        const yMin =
+          payload.yMin ?? (Array.isArray(yRange) ? yRange[0] : undefined) ?? -5;
+        const yMax =
+          payload.yMax ?? (Array.isArray(yRange) ? yRange[1] : undefined) ?? 5;
+
+        const nx = payload.nx ?? payload.samplesX ?? 80;
+        const ny = payload.ny ?? payload.samplesY ?? 80;
+
+        surface3dInit = { expr, xMin, xMax, yMin, yMax, nx, ny };
+      }
+
       const title =
-        tabTitle ||
+        tabTitle ??
         (type === "equation"
           ? titleFromFormula(eq)
-          : raw?.title ?? (type === "array3d" ? "Array" : "Curve3D"));
+          : raw?.title ??
+            (type === "array3d"
+              ? "Array"
+              : type === "curve3d"
+              ? "Curve3D"
+              : type === "surface3d"
+              ? "Surface3D"
+              : "Untitled"));
 
       setTabs((t) => ({
         byId: { ...t.byId, [id]: { id, title } },
@@ -366,7 +427,8 @@ export default function Studio() {
           type,
           equation: eq,
           content: type === "array3d" ? tabContent : undefined,
-          curve3d: type === "curve3d" ? curve3dInit : undefined, // ✅ 추가
+          curve3d: type === "curve3d" ? curve3dInit : undefined,
+          surface3d: type === "surface3d" ? surface3dInit : undefined, // ✅ 추가
           xmin: -3,
           xmax: 3,
           degree: 3,
@@ -599,6 +661,19 @@ export default function Studio() {
           samples: c.samples,
         };
       }
+      if (s.type === "surface3d") {
+        const surf = s.surface3d || {};
+        return {
+          ...base,
+          expr: surf.expr,
+          xMin: surf.xMin,
+          xMax: surf.xMax,
+          yMin: surf.yMin,
+          yMax: surf.yMax,
+          nx: surf.nx,
+          ny: surf.ny,
+        };
+      }
       if (s.type === "array3d") {
         return {
           ...base,
@@ -785,25 +860,52 @@ export default function Studio() {
           }
           onOpenResource={(res) => {
             // pane별로 이미 열린 리소스(vaultId) 검사 (모든 타입에 대해 중복 방지)
-            const paneKeys = ["left", "right"];
-            for (const paneKey of paneKeys) {
-              const paneTabIds = panes[paneKey].ids;
-              const foundId = paneTabIds.find(
-                (tid) => tabState[tid]?.vaultId === res.id
-              );
-              if (foundId) {
-                setActive(paneKey, foundId);
-                setFocusedPane(paneKey);
-                return;
+            if (res.id != null) {
+              const paneKeys = ["left", "right"];
+              for (const paneKey of paneKeys) {
+                const paneTabIds = panes[paneKey].ids;
+                const foundId = paneTabIds.find(
+                  (tid) => tabState[tid]?.vaultId === res.id
+                );
+                if (foundId) {
+                  setActive(paneKey, foundId);
+                  setFocusedPane(paneKey);
+                  return;
+                }
               }
             }
             // 새로 열 때는 LeftPanel에서 연다는 의도로 좌측에 생성
             if (res.type === "curve3d") {
               createTab(res, "left", "curve3d", res, res.title, res.id);
             } else if (res.type === "equation") {
-              createTab(res.formula, "left", "equation", null, res.title, res.id);
+              createTab(
+                res.formula,
+                "left",
+                "equation",
+                null,
+                res.title,
+                res.id
+              );
             } else if (res.type === "array3d") {
-              createTab(null, "left", "array3d", res.content, res.title, res.id);
+              createTab(
+                null,
+                "left",
+                "array3d",
+                res.content,
+                res.title,
+                res.id
+              );
+            } else if (res.type === "surface3d") {
+              // ✅ surface3d용 분기 추가
+              const payload = res.surface3d || res;
+              createTab(
+                payload, // raw
+                "left", // pane
+                "surface3d", // tabType
+                payload, // tabContent (expr, xMin, xMax, yMin, yMax, nx, ny 등)
+                res.title,
+                res.id ?? null // vaultId
+              );
             }
           }}
         />
@@ -860,7 +962,17 @@ export default function Studio() {
               ) : leftActive && leftActive.type === "array3d" ? (
                 <Array3DView data={leftActive.content} />
               ) : leftActive && leftActive.type === "curve3d" ? ( // ✅ 추가
-                <Curve3DView key={`curve-left-${leftActiveId}-${leftActive.vaultId ?? ""}`} curve3d={leftActive.curve3d} />
+                <Curve3DView
+                  key={`curve-left-${leftActiveId}-${leftActive.vaultId ?? ""}`}
+                  curve3d={leftActive.curve3d}
+                />
+              ) : leftActive && leftActive.type === "surface3d" ? ( // ✅ 추가
+                <Surface3DView
+                  key={`surface-left-${leftActiveId}-${
+                    leftActive.vaultId ?? ""
+                  }`}
+                  surface3d={leftActive.surface3d}
+                />
               ) : (
                 <div className="empty-hint">왼쪽에 열린 탭이 없습니다.</div>
               )}
@@ -910,7 +1022,19 @@ export default function Studio() {
                   ) : rightActive && rightActive.type === "array3d" ? (
                     <Array3DView data={rightActive.content} />
                   ) : rightActive && rightActive.type === "curve3d" ? ( // ✅ 추가
-                    <Curve3DView   key={`curve-right-${rightActiveId}-${rightActive.vaultId ?? ""}`}curve3d={rightActive.curve3d} />
+                    <Curve3DView
+                      key={`curve-right-${rightActiveId}-${
+                        rightActive.vaultId ?? ""
+                      }`}
+                      curve3d={rightActive.curve3d}
+                    />
+                  ) : rightActive && rightActive.type === "surface3d" ? ( // ✅ 추가
+                    <Surface3DView
+                      key={`surface-right-${rightActiveId}-${
+                        rightActive.vaultId ?? ""
+                      }`}
+                      surface3d={rightActive.surface3d}
+                    />
                   ) : (
                     <div className="empty-hint">
                       상단의 탭을 이 영역으로 드래그하면 오른쪽 화면으로

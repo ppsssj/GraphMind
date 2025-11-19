@@ -17,6 +17,11 @@ export default function Curve3DView({ curve3d }) {
         tMin={tMin}
         tMax={tMax}
         samples={samples}
+        markers={[
+          { t: -2 },
+          { t: 0, label: "vertex" },
+          { x: 1, y: 1, z: 0 }, // 직접 좌표도 가능
+        ]}
       />
     </div>
   );

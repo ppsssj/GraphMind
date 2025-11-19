@@ -1,7 +1,7 @@
 // src/ui/Curve3DCanvas.jsx
 import { useMemo } from "react";
 import { Canvas } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei";
+import { OrbitControls, Text } from "@react-three/drei";
 import * as THREE from "three";
 import { create, all } from "mathjs";
 
@@ -30,12 +30,10 @@ function makeParamFn(expr, paramName = "t") {
   }
 }
 
-// 좌표축 + 그리드 (3D)
 function Axes3D({ size = 8 }) {
   return (
     <group>
       <axesHelper args={[size]} />
-      {/* 바닥 그리드: x-z 평면 */}
       <gridHelper args={[size * 2, size * 2]} position={[0, -0.001, 0]} />
     </group>
   );
@@ -59,7 +57,6 @@ function ParametricCurve({
     const arr = new Float32Array((n + 1) * 3);
     const dt = (tMax - tMin) / n;
 
-    let minR = 0;
     for (let i = 0; i <= n; i++) {
       const t = tMin + dt * i;
       const x = xt(t);
@@ -69,11 +66,7 @@ function ParametricCurve({
       arr[o + 0] = x;
       arr[o + 1] = y;
       arr[o + 2] = z;
-      const r = Math.sqrt(x * x + y * y + z * z);
-      if (r > minR) minR = r;
     }
-
-    // 필요하면 minR을 바탕으로 카메라/스케일 조정도 가능
 
     return arr;
   }, [xExpr, yExpr, zExpr, tMin, tMax, samples]);
@@ -93,6 +86,66 @@ function ParametricCurve({
   );
 }
 
+/** ✅ 3D 곡선 위 특정 위치 노드
+ * markers: { t, label? } 또는 { x, y, z, label? }[]
+ */
+function CurveMarkers({ xExpr, yExpr, zExpr, markers = [] }) {
+  const xt = useMemo(() => makeParamFn(xExpr, "t"), [xExpr]);
+  const yt = useMemo(() => makeParamFn(yExpr, "t"), [yExpr]);
+  const zt = useMemo(() => makeParamFn(zExpr, "t"), [zExpr]);
+
+  const pts = useMemo(() => {
+    if (!markers || markers.length === 0) return [];
+    return markers.map((m) => {
+      let x, y, z;
+      if (typeof m.t === "number") {
+        const t = m.t;
+        x = xt(t);
+        y = yt(t);
+        z = zt(t);
+      } else {
+        x = m.x;
+        y = m.y;
+        z = m.z;
+      }
+      return {
+        x,
+        y,
+        z,
+        label:
+          m.label ??
+          `(${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})`,
+      };
+    });
+  }, [markers, xt, yt, zt]);
+
+  if (!pts.length) return null;
+
+  return (
+    <group>
+      {pts.map((p, i) => (
+        <group key={i} position={[p.x, p.y, p.z]}>
+          <mesh>
+            <sphereGeometry args={[0.1, 24, 24]} />
+            <meshStandardMaterial color="#ffc107" />
+          </mesh>
+          <Text
+            position={[0.16, 0.16, 0]}
+            fontSize={0.24}
+            color="#ffffff"
+            anchorX="left"
+            anchorY="bottom"
+            outlineWidth={0.035}
+            outlineColor="black"
+          >
+            {p.label}
+          </Text>
+        </group>
+      ))}
+    </group>
+  );
+}
+
 export default function Curve3DCanvas({
   xExpr,
   yExpr,
@@ -100,6 +153,8 @@ export default function Curve3DCanvas({
   tMin,
   tMax,
   samples,
+  // ✅ 추가: 노드 정보
+  markers = [],
 }) {
   return (
     <div
@@ -132,10 +187,17 @@ export default function Curve3DCanvas({
           samples={samples}
         />
 
+        {/* ✅ 곡선 위 노드 */}
+        <CurveMarkers
+          xExpr={xExpr}
+          yExpr={yExpr}
+          zExpr={zExpr}
+          markers={markers}
+        />
+
         <OrbitControls makeDefault />
       </Canvas>
 
-      {/* 우상단에 간단한 정보 표시 (필요하면) */}
       <div
         style={{
           position: "absolute",

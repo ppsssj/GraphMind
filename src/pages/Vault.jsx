@@ -28,6 +28,15 @@ function migrateEquationsToResources(arr) {
   );
 }
 
+// ✅ 타입 정규화 (옛날 equation3d → surface3d)
+function normalizeResourceType(n) {
+  if (!n) return n;
+  if (n.type === "equation3d") {
+    return { ...n, type: "surface3d" };
+  }
+  return n;
+}
+
 export default function Vault() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -45,7 +54,11 @@ export default function Vault() {
       const params = new URLSearchParams(location.search);
       const shouldClear = params.get("clearVault");
       if (shouldClear) {
-        if (!window.confirm("Clear vault cache (localStorage) and reload demo data?")) {
+        if (
+          !window.confirm(
+            "Clear vault cache (localStorage) and reload demo data?"
+          )
+        ) {
           navigate("/vault", { replace: true });
           return;
         }
@@ -55,7 +68,7 @@ export default function Vault() {
         } catch (e) {
           console.error("Failed to clear localStorage keys:", e);
         }
-        const seeded = dummyResources;
+        const seeded = dummyResources.map(normalizeResourceType);
         localStorage.setItem(LS_KEY_NEW, JSON.stringify(seeded));
         setNotes(seeded);
         setActiveId(seeded[0]?.id || null);
@@ -73,8 +86,9 @@ export default function Vault() {
       try {
         const parsed = JSON.parse(newStr);
         if (Array.isArray(parsed) && parsed.length) {
-          setNotes(parsed);
-          setActiveId(parsed[0].id);
+          const normalized = parsed.map(normalizeResourceType);
+          setNotes(normalized);
+          setActiveId(normalized[0].id);
           return;
         }
       } catch {}
@@ -84,7 +98,9 @@ export default function Vault() {
     if (oldStr) {
       try {
         const parsedOld = JSON.parse(oldStr);
-        const migrated = migrateEquationsToResources(parsedOld);
+        const migrated = migrateEquationsToResources(parsedOld).map(
+          normalizeResourceType
+        );
         localStorage.setItem(LS_KEY_NEW, JSON.stringify(migrated));
         setNotes(migrated);
         setActiveId(migrated[0]?.id || null);
@@ -92,7 +108,7 @@ export default function Vault() {
       } catch {}
     }
     // 3) 아무 것도 없으면 데모(수식+배열) 시드
-    const seeded = dummyResources;
+    const seeded = dummyResources.map(normalizeResourceType);
     localStorage.setItem(LS_KEY_NEW, JSON.stringify(seeded));
     setNotes(seeded);
     setActiveId(seeded[0]?.id || null);
@@ -111,6 +127,7 @@ export default function Vault() {
   const handleOpenStudio = (id) => {
     const note = notes.find((n) => n.id === id);
     if (!note) return;
+
     if (note.type === "equation") {
       navigate("/studio", {
         state: {
@@ -146,11 +163,36 @@ export default function Vault() {
           },
         },
       });
+    } else if (note.type === "surface3d" || note.type === "equation3d") {
+      const xRange = note.xRange || [];
+      const yRange = note.yRange || [];
+      const xMin = note.xMin ?? xRange[0] ?? -5;
+      const xMax = note.xMax ?? xRange[1] ?? 5;
+      const yMin = note.yMin ?? yRange[0] ?? -5;
+      const yMax = note.yMax ?? yRange[1] ?? 5;
+
+      navigate("/studio", {
+        state: {
+          type: "surface3d",
+          id: note.id,
+          title: note.title,
+          from: "vault",
+          surface3d: {
+            expr: note.expr ?? note.zExpr ?? note.formula ?? "sin(x)*cos(y)",
+            xMin,
+            xMax,
+            yMin,
+            yMax,
+            nx: note.samples ?? note.samplesX ?? 80,
+            ny: note.samples ?? note.samplesY ?? 80,
+          },
+        },
+      });
     }
   };
 
   const importDummy = () => {
-    const seeded = dummyResources;
+    const seeded = dummyResources.map(normalizeResourceType);
     localStorage.setItem(LS_KEY_NEW, JSON.stringify(seeded));
     setNotes(seeded);
     setActiveId(seeded[0]?.id || null);
@@ -176,35 +218,85 @@ export default function Vault() {
   };
 
   // NewResourceModal → Vault 저장
-  const onCreateResource = ({ type, title, formula, content, tags }) => {
+  const onCreateResource = (payload) => {
+    const {
+      type,
+      title,
+      formula,
+      content,
+      tags,
+      x,
+      y,
+      z,
+      tRange,
+      samples,
+      xRange,
+      yRange,
+      ...rest
+    } = payload;
+
+    const resolvedType = type === "equation3d" ? "surface3d" : type;
     const id = Date.now().toString(36);
 
-    // 공통 필드 (태그 포함)
     const base = {
       id,
-      type,
-      title: title || (type === "equation" ? "New Equation" : "New 3D Array"),
+      type: resolvedType,
+      title:
+        title ||
+        (resolvedType === "equation"
+          ? "New Equation"
+          : resolvedType === "surface3d"
+          ? "New 3D Surface"
+          : resolvedType === "curve3d"
+          ? "New 3D Curve"
+          : resolvedType === "array3d"
+          ? "New 3D Array"
+          : "New Resource"),
       tags: Array.isArray(tags) ? tags : [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      ...rest,
     };
 
-    const item =
-      type === "equation"
-        ? {
-            ...base,
-            formula: formula || "x^2+1",
-          }
-        : type === "curve3d"
-        ? {
-            ...base,
-            formula: formula || "x^2+1", // curve3d도 기본 구조는 수식 기반
-            mode: "curve3d",
-          }
-        : {
-            ...base,
-            content: content || [[[0]]], // array3d 등
-          };
+    let item;
+
+    if (resolvedType === "equation") {
+      item = {
+        ...base,
+        formula: formula || "x^2+1",
+      };
+    } else if (resolvedType === "curve3d") {
+      item = {
+        ...base,
+        x: x || "cos(t)",
+        y: y || "sin(t)",
+        z: z || "t",
+        tRange: Array.isArray(tRange) ? tRange : [0, 2 * Math.PI],
+        samples: samples ?? 400,
+      };
+    } else if (resolvedType === "surface3d") {
+      const xr = Array.isArray(xRange) && xRange.length === 2 ? xRange : [-5, 5];
+      const yr = Array.isArray(yRange) && yRange.length === 2 ? yRange : [-5, 5];
+      item = {
+        ...base,
+        expr: formula || "sin(x)*cos(y)",
+        xRange: xr,
+        yRange: yr,
+        samples: samples ?? 80,
+      };
+    } else if (resolvedType === "array3d") {
+      item = {
+        ...base,
+        content: content || [[[0]]],
+      };
+    } else {
+      // surfaceParam / vectorField 등은 우선 메타만 저장
+      item = {
+        ...base,
+        formula: formula || "",
+        content: content,
+      };
+    }
 
     const next = [...notes, item];
     save(next);
@@ -212,7 +304,7 @@ export default function Vault() {
     setShowNew(false);
 
     // 생성 후 바로 Studio 이동
-    if (type === "equation") {
+    if (resolvedType === "equation") {
       navigate("/studio", {
         state: {
           type: "equation",
@@ -221,17 +313,44 @@ export default function Vault() {
           id,
         },
       });
-    } else if (type === "curve3d") {
+    } else if (resolvedType === "curve3d") {
       navigate("/studio", {
         state: {
-          type: "equation",
-          formula: item.formula,
-          from: "vault",
+          type: "curve3d",
           id,
-          mode: "curve3d",
+          title: item.title,
+          from: "vault",
+          curve3d: {
+            xExpr: item.x,
+            yExpr: item.y,
+            zExpr: item.z,
+            tMin: item.tRange?.[0],
+            tMax: item.tRange?.[1],
+            samples: item.samples,
+          },
         },
       });
-    } else {
+    } else if (resolvedType === "surface3d") {
+      const [xMin, xMax] = item.xRange || [-5, 5];
+      const [yMin, yMax] = item.yRange || [-5, 5];
+      navigate("/studio", {
+        state: {
+          type: "surface3d",
+          id,
+          title: item.title,
+          from: "vault",
+          surface3d: {
+            expr: item.expr,
+            xMin,
+            xMax,
+            yMin,
+            yMax,
+            nx: item.samples ?? 80,
+            ny: item.samples ?? 80,
+          },
+        },
+      });
+    } else if (resolvedType === "array3d") {
       navigate("/studio", {
         state: {
           type: "array3d",
@@ -321,8 +440,8 @@ export default function Vault() {
             setActiveId(id);
             setFocusTick((t) => t + 1);
           }}
-          onUpdate={handleUpdateNote} // ✅ 추가
-          onDelete={handleDeleteNote} // ✅ 추가
+          onUpdate={handleUpdateNote}
+          onDelete={handleDeleteNote}
         />
         <div
           className="vault-resizer"
@@ -382,8 +501,7 @@ export default function Vault() {
                 } catch (e) {
                   console.error("Failed to clear localStorage keys:", e);
                 }
-                // force re-seed demo data
-                const seeded = dummyResources;
+                const seeded = dummyResources.map(normalizeResourceType);
                 localStorage.setItem(LS_KEY_NEW, JSON.stringify(seeded));
                 setNotes(seeded);
                 setActiveId(seeded[0]?.id || null);

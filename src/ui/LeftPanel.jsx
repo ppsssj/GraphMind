@@ -1,17 +1,19 @@
 // src/ui/LeftPanel.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { create, all } from "mathjs";
+
 const math = create(all, {});
 
 // ── helpers ───────────────────────────────────────────
 function normalizeFormula(raw) {
   if (!raw) return "x";
   let s = String(raw).trim();
-  s = s.replace(/^y\s*=\s*/i, "");                  // "y = " 제거
+  s = s.replace(/^y\s*=\s*/i, ""); // "y = " 제거
   s = s.replace(/e\s*\^\s*\{([^}]+)\}/gi, "exp($1)"); // e^{...} → exp(...)
-  s = s.replace(/(\d)(x)/gi, "$1*$2");              // 0.3x → 0.3*x
+  s = s.replace(/(\d)(x)/gi, "$1*$2"); // 0.3x → 0.3*x
   return s;
 }
+
 function exprToFn(raw) {
   const expr = normalizeFormula(raw);
   try {
@@ -31,6 +33,7 @@ function array3dDims(content) {
   const X = Y ? content[0][0]?.length ?? 0 : 0;
   return { X, Y, Z };
 }
+
 function array3dNonZero(content) {
   let cnt = 0;
   for (let z = 0; z < content.length; z++) {
@@ -115,8 +118,8 @@ function Sparkline({
 
     // 마지막 점
     const last = pts[pts.length - 1];
-    const lx = xToPx(last.x),
-      ly = yToPx(last.y);
+    const lx = xToPx(last.x);
+    const ly = yToPx(last.y);
     ctx.fillStyle = "#c6d0f5";
     ctx.beginPath();
     ctx.arc(lx, ly, 1.75, 0, Math.PI * 2);
@@ -126,10 +129,12 @@ function Sparkline({
   return <canvas ref={ref} className="sparkline" aria-hidden="true" />;
 }
 
-// ── Curve / Array 미니 프리뷰 컴포넌트 ─────────────────
+// ── Curve / Array / Surface 미니 프리뷰 ───────────────
 function exprToFnT(raw) {
   if (!raw) return () => NaN;
-  const expr = String(raw).includes("=") ? String(raw).split("=").pop() : raw;
+  const expr = String(raw).includes("=")
+    ? String(raw).split("=").pop()
+    : raw;
   try {
     const compiled = math.compile(expr);
     return (t) => {
@@ -141,8 +146,32 @@ function exprToFnT(raw) {
   }
 }
 
+// z = f(x,y)
+function exprToFnXY(raw) {
+  if (!raw) return () => 0;
+  const rhs = String(raw).includes("=")
+    ? String(raw).split("=").pop()
+    : raw;
+  const expr = String(rhs ?? "").trim();
+  if (!expr) return () => 0;
+  try {
+    const compiled = math.compile(expr);
+    return (x, y) => {
+      try {
+        const v = Number(compiled.evaluate({ x, y }));
+        return Number.isFinite(v) ? v : 0;
+      } catch {
+        return 0;
+      }
+    };
+  } catch {
+    return () => 0;
+  }
+}
+
 function MiniCurvePreview({ curve, width = 180, height = 72 }) {
   const ref = useRef(null);
+
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas || !curve) return;
@@ -157,11 +186,21 @@ function MiniCurvePreview({ curve, width = 180, height = 72 }) {
 
     const xFn = exprToFnT(curve.xExpr ?? curve.x ?? "t");
     const yFn = exprToFnT(curve.yExpr ?? curve.y ?? "t");
-    const tMin = curve.tMin ?? (Array.isArray(curve.tRange) ? curve.tRange[0] : 0);
-    const tMax = curve.tMax ?? (Array.isArray(curve.tRange) ? curve.tRange[1] : 2 * Math.PI);
-    const samples = Math.min(120, Math.max(16, Math.floor((curve.samples ?? 200) / 4)));
+    const tMin =
+      curve.tMin ??
+      (Array.isArray(curve.tRange) ? curve.tRange[0] : 0);
+    const tMax =
+      curve.tMax ??
+      (Array.isArray(curve.tRange) ? curve.tRange[1] : 2 * Math.PI);
+    const samples = Math.min(
+      120,
+      Math.max(16, Math.floor((curve.samples ?? 200) / 4))
+    );
 
-    const ts = Array.from({ length: samples }, (_, i) => tMin + (i * (tMax - tMin)) / (samples - 1));
+    const ts = Array.from(
+      { length: samples },
+      (_, i) => tMin + (i * (tMax - tMin)) / (samples - 1)
+    );
     const pts = ts
       .map((t) => ({ x: xFn(t), y: yFn(t) }))
       .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
@@ -171,14 +210,24 @@ function MiniCurvePreview({ curve, width = 180, height = 72 }) {
     let xmax = Math.max(...pts.map((p) => p.x));
     let ymin = Math.min(...pts.map((p) => p.y));
     let ymax = Math.max(...pts.map((p) => p.y));
-    if (xmin === xmax) { xmin -= 1; xmax += 1; }
-    if (ymin === ymax) { ymin -= 1; ymax += 1; }
+    if (xmin === xmax) {
+      xmin -= 1;
+      xmax += 1;
+    }
+    if (ymin === ymax) {
+      ymin -= 1;
+      ymax += 1;
+    }
     const padX = (xmax - xmin) * 0.08;
     const padY = (ymax - ymin) * 0.08;
-    xmin -= padX; xmax += padX; ymin -= padY; ymax += padY;
+    xmin -= padX;
+    xmax += padX;
+    ymin -= padY;
+    ymax += padY;
 
     const mx = (x) => ((x - xmin) / (xmax - xmin)) * (width - 8) + 4;
-    const my = (y) => height - (((y - ymin) / (ymax - ymin)) * (height - 8) + 4);
+    const my = (y) =>
+      height - (((y - ymin) / (ymax - ymin)) * (height - 8) + 4);
 
     // 배경
     ctx.fillStyle = "#0f1320";
@@ -213,6 +262,7 @@ function MiniCurvePreview({ curve, width = 180, height = 72 }) {
 
 function MiniArrayPreview({ content, width = 120, height = 72 }) {
   const ref = useRef(null);
+
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas || !Array.isArray(content) || content.length === 0) return;
@@ -240,7 +290,12 @@ function MiniArrayPreview({ content, width = 120, height = 72 }) {
         // 값에 따라 색상 (단순 흑백)
         const alpha = Math.max(0, Math.min(1, Number(v) ? 0.9 : 0.06));
         ctx.fillStyle = `rgba(125,155,200,${alpha})`;
-        ctx.fillRect(c * cellW, r * cellH, Math.ceil(cellW), Math.ceil(cellH));
+        ctx.fillRect(
+          c * cellW,
+          r * cellH,
+          Math.ceil(cellW),
+          Math.ceil(cellH)
+        );
       }
     }
     // 테두리
@@ -251,17 +306,134 @@ function MiniArrayPreview({ content, width = 120, height = 72 }) {
   return <canvas ref={ref} className="mini-array" aria-hidden="true" />;
 }
 
+function MiniSurfacePreview({ surface, width = 140, height = 72 }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas || !surface) return;
+    const ctx = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+
+    // expr / 범위 추출 (top-level 또는 surface.surface3d에 있을 수 있음)
+    const exprRaw =
+      surface.expr ??
+      surface.zExpr ??
+      surface.formula ??
+      surface.surface3d?.expr ??
+      surface.surface3d?.zExpr ??
+      surface.surface3d?.formula ??
+      "sin(x) * cos(y)";
+
+    const xMin =
+      surface.xMin ??
+      surface.surface3d?.xMin ??
+      (Array.isArray(surface.xRange)
+        ? surface.xRange[0]
+        : surface.surface3d?.xRange?.[0]) ??
+      -3;
+    const xMax =
+      surface.xMax ??
+      surface.surface3d?.xMax ??
+      (Array.isArray(surface.xRange)
+        ? surface.xRange[1]
+        : surface.surface3d?.xRange?.[1]) ??
+      3;
+    const yMin =
+      surface.yMin ??
+      surface.surface3d?.yMin ??
+      (Array.isArray(surface.yRange)
+        ? surface.yRange[0]
+        : surface.surface3d?.yRange?.[0]) ??
+      -3;
+    const yMax =
+      surface.yMax ??
+      surface.surface3d?.yMax ??
+      (Array.isArray(surface.yRange)
+        ? surface.yRange[1]
+        : surface.surface3d?.yRange?.[1]) ??
+      3;
+
+    const fn = exprToFnXY(exprRaw);
+    const gx = 40;
+    const gy = 24;
+
+    const zVals = [];
+    let zMin = Infinity;
+    let zMax = -Infinity;
+
+    for (let j = 0; j < gy; j++) {
+      const ty = j / (gy - 1 || 1);
+      const y = yMin + (yMax - yMin) * ty;
+      for (let i = 0; i < gx; i++) {
+        const tx = i / (gx - 1 || 1);
+        const x = xMin + (xMax - xMin) * tx;
+        const z = fn(x, y);
+        zVals.push(z);
+        if (z < zMin) zMin = z;
+        if (z > zMax) zMax = z;
+      }
+    }
+
+    if (!Number.isFinite(zMin) || !Number.isFinite(zMax)) {
+      zMin = -1;
+      zMax = 1;
+    }
+    const span = zMax - zMin || 1;
+
+    const cellW = width / gx;
+    const cellH = height / gy;
+
+    // 배경
+    ctx.fillStyle = "#0f1320";
+    ctx.fillRect(0, 0, width, height);
+
+    // height-map 렌더링
+    let idx = 0;
+    for (let j = 0; j < gy; j++) {
+      for (let i = 0; i < gx; i++) {
+        const z = zVals[idx++];
+        const t = Math.max(0, Math.min(1, (z - zMin) / span));
+        // HSL 기반 간단 컬러맵 (파랑→청록→노랑)
+        const h = 220 - 80 * t; // degree
+        const s = 60 + 20 * t;
+        const l = 35 + 15 * t;
+        ctx.fillStyle = `hsl(${h}, ${s}%, ${l}%)`;
+        ctx.fillRect(
+          i * cellW,
+          j * cellH,
+          Math.ceil(cellW),
+          Math.ceil(cellH)
+        );
+      }
+    }
+
+    // 테두리
+    ctx.strokeStyle = "#263044";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
+  }, [surface, width, height]);
+
+  return <canvas ref={ref} className="mini-surface" aria-hidden="true" />;
+}
+
 // ── LeftPanel (mixed resources 지원) ──────────────────
 export default function LeftPanel({
   // 구형 호환 props
   equations = [], // [{id,title,formula,tags,updatedAt}]
   // 신형 혼합 입력
-  resources, // [{ type: "equation" | "array3d" | "curve3d" , ... }]
+  resources, // [{ type: "equation" | "array3d" | "curve3d" | "surface3d", ... }]
   // 액션 콜백
   onOpenQuick, // (formula:string) => void   - equation 전용
   onPreview, // (formula:string) => void   - equation 전용
   onOpenArray, // (res) => void              - array3d 전용 (없으면 onOpenResource로 fallback)
-  onOpenResource, // (res) => void              - 범용 열기 (curve3d 포함)
+  onOpenResource, // (res) => void              - 범용 열기 (curve3d / surface3d 포함)
   onNew, // () => void  (지금은 사용 안 함 / 보존만)
 }) {
   const [q, setQ] = useState("");
@@ -284,6 +456,10 @@ export default function LeftPanel({
   );
   const curves = useMemo(
     () => items.filter((r) => r.type === "curve3d"),
+    [items]
+  );
+  const surfaces = useMemo(
+    () => items.filter((r) => r.type === "surface3d"),
     [items]
   );
 
@@ -328,7 +504,35 @@ export default function LeftPanel({
     });
   }, [curves, q, tag]);
 
-  const QUICK = ["x", "x^2", "x^3 - 2*x", "sin(x)", "cos(x)", "exp(x)-1", "log(x+1)"];
+  const filteredSurfaces = useMemo(() => {
+    const kw = q.trim().toLowerCase();
+    return surfaces.filter((s) => {
+      const byTag = tag === "all" || (s.tags || []).includes(tag);
+      const expr =
+        s.expr ??
+        s.zExpr ??
+        s.formula ??
+        s.surface3d?.expr ??
+        s.surface3d?.zExpr ??
+        s.surface3d?.formula ??
+        "";
+      const byKw =
+        !kw ||
+        (s.title || "").toLowerCase().includes(kw) ||
+        String(expr).toLowerCase().includes(kw);
+      return byTag && byKw;
+    });
+  }, [surfaces, q, tag]);
+
+  const QUICK = [
+    "x",
+    "x^2",
+    "x^3 - 2*x",
+    "sin(x)",
+    "cos(x)",
+    "exp(x)-1",
+    "log(x+1)",
+  ];
 
   const openArray = (res) => {
     if (onOpenArray) return onOpenArray(res);
@@ -344,8 +548,7 @@ export default function LeftPanel({
         <button
           className="btn solid"
           onClick={() => {
-            // ❗ 기존에는 onNew() + Quick Picks 동시 실행이었는데
-            //    이제는 'Quick Picks만 토글'하도록 변경
+            // 지금은 Quick Picks 토글만 수행
             setShowQuick((prev) => !prev);
           }}
         >
@@ -434,6 +637,7 @@ export default function LeftPanel({
                 >
                   Open
                 </button>
+                {/* 필요 시 Preview 버튼 복원 가능 */}
                 {/* <button
                   className="btn"
                   onClick={() => onPreview?.(e.formula)}
@@ -444,7 +648,9 @@ export default function LeftPanel({
               </div>
             </li>
           ))}
-          {filteredEqs.length === 0 && <li className="eq-empty">No matches.</li>}
+          {filteredEqs.length === 0 && (
+            <li className="eq-empty">No matches.</li>
+          )}
         </ul>
       </div>
 
@@ -467,7 +673,11 @@ export default function LeftPanel({
                     )}
                   </div>
 
-                  <MiniArrayPreview content={a.content} width={120} height={60} />
+                  <MiniArrayPreview
+                    content={a.content}
+                    width={120}
+                    height={60}
+                  />
                   <div className="eq-formula">
                     Size: {dims.X}×{dims.Y}×{dims.Z} &nbsp; | &nbsp; Non-zero:{" "}
                     {nnz}
@@ -502,6 +712,84 @@ export default function LeftPanel({
         </div>
       )}
 
+      {/* 3D Surfaces 섹션 (z = f(x,y)) */}
+      {surfaces.length > 0 && (
+        <div className="section">
+          <div className="label">3D Surfaces</div>
+          <ul className="eq-list">
+            {filteredSurfaces.map((s) => {
+              const expr =
+                s.expr ??
+                s.zExpr ??
+                s.formula ??
+                s.surface3d?.expr ??
+                s.surface3d?.zExpr ??
+                s.surface3d?.formula ??
+                "";
+              const xRange =
+                s.xRange ?? s.surface3d?.xRange ?? [s.xMin, s.xMax];
+              const yRange =
+                s.yRange ?? s.surface3d?.yRange ?? [s.yMin, s.yMax];
+              const xMin = xRange?.[0] ?? s.xMin ?? s.surface3d?.xMin ?? -3;
+              const xMax = xRange?.[1] ?? s.xMax ?? s.surface3d?.xMax ?? 3;
+              const yMin = yRange?.[0] ?? s.yMin ?? s.surface3d?.yMin ?? -3;
+              const yMax = yRange?.[1] ?? s.yMax ?? s.surface3d?.yMax ?? 3;
+
+              return (
+                <li key={s.id} className="eq-item">
+                  <div className="eq-head">
+                    <div className="eq-title">{s.title}</div>
+                    {s.updatedAt && (
+                      <div className="eq-updated">
+                        {new Date(s.updatedAt).toLocaleDateString()}
+                      </div>
+                    )}
+                  </div>
+
+                  <MiniSurfacePreview
+                    surface={s}
+                    width={140}
+                    height={64}
+                  />
+                  <div
+                    className="eq-formula"
+                    style={{ fontFamily: "monospace", fontSize: 11 }}
+                  >
+                    z = {String(expr || "").slice(0, 80)}
+                    {String(expr || "").length > 80 ? "…" : ""}
+                    <br />
+                    x ∈ [{xMin}, {xMax}], y ∈ [{yMin}, {yMax}]
+                  </div>
+
+                  {s.tags?.length ? (
+                    <div className="eq-tags">
+                      {s.tags.map((t) => (
+                        <span key={t} className="chip">
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <div className="eq-actions">
+                    <button
+                      className="btn solid"
+                      onClick={() => onOpenResource?.(s)}
+                      title="Open 3D Surface"
+                    >
+                      Open
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+            {filteredSurfaces.length === 0 && (
+              <li className="eq-empty">No matches.</li>
+            )}
+          </ul>
+        </div>
+      )}
+
       {/* 3D Curves 섹션 */}
       {curves.length > 0 && (
         <div className="section">
@@ -519,7 +807,10 @@ export default function LeftPanel({
                 </div>
 
                 <MiniCurvePreview curve={c} width={160} height={64} />
-                <div className="eq-formula" style={{ fontFamily: "monospace", fontSize: 11 }}>
+                <div
+                  className="eq-formula"
+                  style={{ fontFamily: "monospace", fontSize: 11 }}
+                >
                   x(t): {c.x}
                   <br />
                   y(t): {c.y}

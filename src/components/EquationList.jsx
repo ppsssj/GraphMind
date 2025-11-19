@@ -2,7 +2,6 @@
 import React, { useMemo, useRef, useState } from "react";
 import "../styles/EquationList.css";
 
-// EquationList.jsx 상단부 어딘가
 function Curve3DIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
@@ -19,6 +18,28 @@ function Curve3DIcon() {
         <path d="M5 16 C8 10 12 13 17 7" />
         {/* Z축 느낌 (대각선) */}
         <path d="M7 18 L11 22 L20 13" opacity="0.5" />
+      </g>
+    </svg>
+  );
+}
+
+/** ✅ 새로 추가: 3D Surface 아이콘 (보라 계열) */
+function Surface3DIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+      <g
+        stroke="currentColor"
+        strokeWidth="1.4"
+        fill="none"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {/* 바닥 평면 (격자) */}
+        <path d="M3 16 L9 20 L21 14 L15 10 Z" opacity="0.55" />
+        <path d="M9 20 L9 13 L3 9" opacity="0.4" />
+        <path d="M15 10 L15 17 L21 14" opacity="0.4" />
+        {/* 곡면 실루엣 */}
+        <path d="M4 13 C8 9 12 11 16 8 C18 7 20 7.5 21 9" />
       </g>
     </svg>
   );
@@ -44,11 +65,12 @@ export default function EquationList({
 
   const iconOf = (type) => {
     if (type === "array3d") return "⬢";
-    if (type === "curve3d") return ""; // 아이콘은 별도 컴포넌트로 렌더
+    if (type === "curve3d") return ""; // icon은 별도 컴포넌트
+    if (type === "surface3d") return ""; // icon은 별도 컴포넌트
     return "ƒx";
   };
 
-  // ---- filtering (수식 + 배열 모두 검색) -------------------------
+  // ---- filtering (수식 + 배열 + surface까지 검색) --------------
   const filtered = useMemo(() => {
     const q = (query || "").trim().toLowerCase();
     if (!q) return items;
@@ -56,11 +78,14 @@ export default function EquationList({
     return items.filter((n) => {
       const title = (n.title || "").toLowerCase();
       const formula = (n.formula || "").toLowerCase();
+      const expr = (n.expr || "").toLowerCase(); // ✅ surface3d용
       const tags = (n.tags || []).join(" ").toLowerCase();
       const type = (n.type || "").toLowerCase();
       const dims = n.type === "array3d" ? dimsOf(n).toLowerCase() : "";
-      // 제목 / 수식 / 태그 / 타입 / 배열 크기 문자열까지 검색
-      return [title, formula, tags, type, dims].some((s) => s.includes(q));
+      // 제목 / 수식 / expr / 태그 / 타입 / 배열 크기 문자열까지 검색
+      return [title, formula, expr, tags, type, dims].some((s) =>
+        s.includes(q)
+      );
     });
   }, [items, query]);
 
@@ -266,12 +291,22 @@ export default function EquationList({
         {filtered.map((note) => {
           const isArr = note.type === "array3d";
           const isCurve = note.type === "curve3d";
+          const isSurface = note.type === "surface3d";
           const dims = isArr ? dimsOf(note) : null;
-          const subtitle = isArr
-            ? `Size: ${dims}`
-            : isCurve
-            ? `samples: ${note.samples ?? "-"}`
-            : note.formula || "";
+
+          // ✅ 서브타이틀: 타입별 다르게
+          let subtitle;
+          if (isArr) {
+            subtitle = `Size: ${dims}`;
+          } else if (isCurve) {
+            subtitle = `samples: ${note.samples ?? "-"}`;
+          } else if (isSurface) {
+            const expr = note.expr || note.formula || "";
+            subtitle = expr ? `z = ${expr}` : "z = f(x, y)";
+          } else {
+            subtitle = note.formula || "";
+          }
+
           const when = new Date(
             note.updatedAt || note.createdAt || Date.now()
           ).toLocaleString();
@@ -289,22 +324,53 @@ export default function EquationList({
               <div className="item-head">
                 <div
                   className={`item-icon ${
-                    isArr ? "arr" : isCurve ? "curve" : "eq"
+                    isArr
+                      ? "arr"
+                      : isCurve
+                      ? "curve"
+                      : isSurface
+                      ? "surface"
+                      : "eq"
                   }`}
                 >
-                  {isCurve ? <Curve3DIcon /> : iconOf(note.type)}
+                  {isCurve ? (
+                    <Curve3DIcon />
+                  ) : isSurface ? (
+                    <Surface3DIcon />
+                  ) : (
+                    iconOf(note.type)
+                  )}
                 </div>
                 <div className="item-title-wrap">
                   <div className="title-row">
                     <div className="title">
-                      {note.title || (isArr ? "3D Array" : "Equation")}
+                      {note.title ||
+                        (isArr
+                          ? "3D Array"
+                          : isCurve
+                          ? "3D Curve"
+                          : isSurface
+                          ? "3D Surface"
+                          : "Equation")}
                     </div>
                     <span
                       className={`type-pill ${
-                        isArr ? "pill-arr" : isCurve ? "pill-curve" : "pill-eq"
+                        isArr
+                          ? "pill-arr"
+                          : isCurve
+                          ? "pill-curve"
+                          : isSurface
+                          ? "pill-surface"
+                          : "pill-eq"
                       }`}
                     >
-                      {isArr ? "array3d" : isCurve ? "curve3d" : "equation"}
+                      {isArr
+                        ? "array3d"
+                        : isCurve
+                        ? "curve3d"
+                        : isSurface
+                        ? "surface3d"
+                        : "equation"}
                     </span>
                   </div>
                   <div className={isArr ? "dims" : "formula"}>{subtitle}</div>
