@@ -36,3 +36,31 @@
     transform: rotate(360deg);
   }
 }
+
+/* 기본 마우스 커서 숨기기 */
+body {
+  cursor: none;
+}
+
+/* 커스텀 커서 공통 스타일 */
+.custom-cursor {
+  position: fixed;
+  width: 18px;
+  height: 18px;
+  border: 2px solid #00bcd4; /* 포인트 색상 */
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 9999;
+  transition: transform 0.08s ease-out, opacity 0.15s ease-out;
+}
+
+/* 클릭 시 살짝 줄어드는 효과 */
+.custom-cursor.clicking {
+  transform: translate(-50%, -50%) scale(0.75);
+}
+
+/* 링크/버튼 위에 있을 때 확대 효과 */
+.custom-cursor.active {
+  transform: translate(-50%, -50%) scale(1.4);
+}
