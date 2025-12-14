@@ -1,21 +1,56 @@
-// GraphCanvas.jsx equation graph component
+// src/ui/GraphCanvas.jsx
 import { useMemo, useRef, useState, useEffect } from "react";
-import { Canvas } from "@react-three/fiber";
-import {
-  OrbitControls,
-  TransformControls,
-  Text,
-  useCursor,
-} from "@react-three/drei";
+import { Canvas, useThree } from "@react-three/fiber";
+import { OrbitControls, TransformControls, Text, useCursor } from "@react-three/drei";
 import * as THREE from "three";
+
 import { HandInputProvider } from "../input/HandInputProvider";
 import { useInputPrefs } from "../store/useInputPrefs";
+
+/**
+ * Hand control behavior (MediaPipe Hands 기반 Provider 전제)
+ * - index tip: 커서/드래그 위치
+ * - pinch (thumb-index): 드래그 down/up
+ * - zoom: Provider가 zoomApiRef.current.zoomBy(delta) 호출
+ *
+ * Important:
+ * - handEnabled=true일 때 OrbitControls를 꺼서 "회전" 간섭을 차단합니다.
+ */
+
+function CameraZoomBridge({ zoomApiRef, minZoom = 25, maxZoom = 220 }) {
+  const { camera } = useThree();
+
+  useEffect(() => {
+    if (!zoomApiRef) return;
+
+    zoomApiRef.current = {
+      zoomBy: (delta) => {
+        // delta: +면 줌인, -면 줌아웃 (Provider에서 이 규약대로 호출)
+        const next = camera.zoom * (1 + delta);
+        camera.zoom = Math.max(minZoom, Math.min(maxZoom, next));
+        camera.updateProjectionMatrix();
+      },
+      setZoom: (z) => {
+        camera.zoom = Math.max(minZoom, Math.min(maxZoom, z));
+        camera.updateProjectionMatrix();
+      },
+      getZoom: () => camera.zoom,
+    };
+
+    return () => {
+      if (zoomApiRef.current) zoomApiRef.current = null;
+    };
+  }, [camera, zoomApiRef, minZoom, maxZoom]);
+
+  return null;
+}
 
 function Axes({ xmin = -8, xmax = 8, ymin = -8, ymax = 8 }) {
   return (
     <group>
       <axesHelper args={[8]} />
       <gridHelper args={[16, 16]} rotation={[Math.PI / 2, 0, 0]} />
+
       {/* y=0 */}
       <line>
         <bufferGeometry
@@ -26,6 +61,7 @@ function Axes({ xmin = -8, xmax = 8, ymin = -8, ymax = 8 }) {
         />
         <lineBasicMaterial color="#6039BC" linewidth={3} />
       </line>
+
       {/* x=0 */}
       <line>
         <bufferGeometry
@@ -45,10 +81,12 @@ function Curve({ fn, xmin, xmax, color = "white" }) {
     const steps = 220;
     const dx = (xmax - xmin) / steps;
     const arr = new Float32Array((steps + 1) * 3);
+
     for (let i = 0; i <= steps; i++) {
       const x = xmin + dx * i;
       const yRaw = fn ? fn(x) : NaN;
       const y = Number.isFinite(yRaw) ? yRaw : 0;
+
       const o = i * 3;
       arr[o + 0] = x;
       arr[o + 1] = y;
@@ -91,13 +129,15 @@ function EditablePoint({ index, position, onChange, setControlsBusy }) {
       if (!obj) return;
       onChange(index, { x: obj.position.x, y: obj.position.y });
     };
-    const startStop = (dragging) => setControlsBusy(!!dragging);
+
+    const onDraggingChanged = (e) => setControlsBusy(!!e.value);
 
     tc.addEventListener("change", handleChange);
-    tc.addEventListener("dragging-changed", (e) => startStop(e.value));
+    tc.addEventListener("dragging-changed", onDraggingChanged);
+
     return () => {
       tc.removeEventListener("change", handleChange);
-      tc.removeEventListener("dragging-changed", (e) => startStop(e.value));
+      tc.removeEventListener("dragging-changed", onDraggingChanged);
     };
   }, [index, onChange, setControlsBusy]);
 
@@ -109,6 +149,7 @@ function EditablePoint({ index, position, onChange, setControlsBusy }) {
           <meshStandardMaterial color="#ffc107" />
         </mesh>
       </TransformControls>
+
       <group position={[position.x + 0.08, position.y + 0.08, 0]}>
         <Text
           fontSize={0.16}
@@ -125,18 +166,8 @@ function EditablePoint({ index, position, onChange, setControlsBusy }) {
 }
 
 /* 점 직접 드래그 */
-function DraggablePoint({
-  index,
-  position,
-  xmin,
-  xmax,
-  onChange,
-  setControlsBusy,
-}) {
-  const plane = useMemo(
-    () => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0),
-    []
-  );
+function DraggablePoint({ index, position, xmin, xmax, onChange, setControlsBusy }) {
+  const plane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), []);
   const hit = useRef(new THREE.Vector3());
   const [hovered, setHovered] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -149,8 +180,8 @@ function DraggablePoint({
     setControlsBusy(true);
     try {
       e.target.setPointerCapture?.(e.pointerId);
-    } catch (err) {
-      // ignore NotFoundError when pointer capture is not available for synthetic pointers
+    } catch {
+      // synthetic pointer일 수 있으니 무시
     }
   };
 
@@ -160,9 +191,11 @@ function DraggablePoint({
     if (e.ray.intersectPlane(plane, hit.current)) {
       let x = hit.current.x;
       let y = hit.current.y;
+
       if (Number.isFinite(xmin) && Number.isFinite(xmax)) {
         x = Math.max(xmin, Math.min(xmax, x));
       }
+
       if (Number.isFinite(x) && Number.isFinite(y)) {
         onChange(index, { x, y });
       }
@@ -173,10 +206,13 @@ function DraggablePoint({
     e.stopPropagation();
     setDragging(false);
     setControlsBusy(false);
+
+    const el = e.target;
+    const pid = e.pointerId;
     try {
-      e.target.releasePointerCapture?.(e.pointerId);
-    } catch (err) {
-      // ignore NotFoundError when pointer capture wasn't set
+      if (el?.hasPointerCapture?.(pid)) el.releasePointerCapture(pid);
+    } catch {
+      // NotFoundError 방지
     }
   };
 
@@ -230,6 +266,8 @@ export default function GraphCanvas({
   showControls = true,
 }) {
   const wrapperRef = useRef(null);
+  const zoomApiRef = useRef(null);
+
   const [controlsBusy, setControlsBusy] = useState(false);
 
   const [viewMode, setViewMode] = useState("both"); // "typed" | "fit" | "both"
@@ -238,21 +276,32 @@ export default function GraphCanvas({
 
   const [editMode, setEditMode] = useState("drag"); // "arrows" | "drag"
 
+  const handEnabled = useInputPrefs((s) => s.handControlEnabled);
+
   return (
     <div
       ref={wrapperRef}
+      className="graph-canvas-wrap"
       style={{
         position: "relative",
-        flex: 1, // pane-content의 남은 공간을 채움
+        flex: 1,
         width: "100%",
         height: "100%",
+        minHeight: 0,
         overflow: "hidden",
       }}
     >
-      {/* Hand input provider: mounted when enabled in preferences */}
-      {useInputPrefs((s) => s.handControlEnabled) && (
-        <HandInputProvider targetRef={wrapperRef} />
+      {/* ✅ 손 입력: 토글 ON일 때만 MediaPipe Hands Provider 마운트 */}
+      {handEnabled && (
+        <HandInputProvider
+          targetRef={wrapperRef}
+          zoomApiRef={zoomApiRef}
+          enabled={true}
+          mirror={true}
+          modelPath="/models/hand_landmarker.task"
+        />
       )}
+
       <Canvas
         orthographic
         camera={{ zoom: 80, position: [0, 0, 10] }}
@@ -261,6 +310,9 @@ export default function GraphCanvas({
           gl.setClearColor(new THREE.Color("#0f1115"), 1.0);
         }}
       >
+        {/* ✅ HandInputProvider가 줌을 직접 제어할 수 있게 브릿지 제공 */}
+        <CameraZoomBridge zoomApiRef={zoomApiRef} />
+
         <ambientLight intensity={0.7} />
         <directionalLight position={[3, 5, 6]} intensity={0.9} />
 
@@ -307,9 +359,11 @@ export default function GraphCanvas({
           )
         )}
 
-        <OrbitControls makeDefault enabled={!controlsBusy} />
+        {/* ✅ 손 입력 ON이면 회전/줌 간섭 방지 위해 OrbitControls OFF */}
+        <OrbitControls makeDefault enabled={!controlsBusy && !handEnabled} />
       </Canvas>
-      {/* 우상단 오버레이: 반응형(줄바꿈/축소) */}{" "}
+
+      {/* 우상단 오버레이 */}
       {showControls && (
         <div
           style={{
@@ -439,13 +493,11 @@ export default function GraphCanvas({
               </button>
             </div>
             <div style={{ marginTop: 6, opacity: 0.8 }}>
-              {editMode === "drag"
-                ? "점 클릭 후 드래그"
-                : "노란점의 화살표로 이동"}
+              {editMode === "drag" ? "점 클릭 후 드래그" : "노란점의 화살표로 이동"}
             </div>
           </div>
 
-          {/* 손가락 카메라 입력 토글 */}
+          {/* 손 입력 토글 */}
           <div
             style={{
               background: "rgba(0,0,0,0.55)",
@@ -454,7 +506,7 @@ export default function GraphCanvas({
               borderRadius: 8,
               fontSize: 11,
               lineHeight: 1.2,
-              minWidth: "110px",
+              minWidth: "130px",
               display: "flex",
               flexDirection: "column",
               gap: 6,
@@ -464,8 +516,9 @@ export default function GraphCanvas({
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <HandToggle />
             </div>
-            <div style={{ marginTop: 6, opacity: 0.8, fontSize: 11 }}>
-              카메라로 손가락을 추적해 드래그/클릭을 흉내냅니다.
+            <div style={{ marginTop: 6, opacity: 0.8 }}>
+              핀치(엄지-검지)=드래그<br />
+              검지-중지 거리=줌
             </div>
           </div>
         </div>
@@ -477,6 +530,7 @@ export default function GraphCanvas({
 function HandToggle() {
   const enabled = useInputPrefs((s) => s.handControlEnabled);
   const setEnabled = useInputPrefs((s) => s.setHandControlEnabled);
+
   return (
     <button
       onClick={() => setEnabled(!enabled)}

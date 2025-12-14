@@ -11,7 +11,10 @@ export default function GraphView({
   curveKey,
 }) {
   return (
-    <div className="graph-view">
+    <div
+      className="graph-view"
+      style={{ flex: 1, minHeight: 0, width: "100%", height: "100%", display: "flex" }}
+    >
       <GraphCanvas
         points={points}
         onPointChange={updatePoint}
