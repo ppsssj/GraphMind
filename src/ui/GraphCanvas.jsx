@@ -8,6 +8,8 @@ import {
   useCursor,
 } from "@react-three/drei";
 import * as THREE from "three";
+import { HandInputProvider } from "../input/HandInputProvider";
+import { useInputPrefs } from "../store/useInputPrefs";
 
 function Axes({ xmin = -8, xmax = 8, ymin = -8, ymax = 8 }) {
   return (
@@ -145,7 +147,11 @@ function DraggablePoint({
     e.stopPropagation();
     setDragging(true);
     setControlsBusy(true);
-    e.target.setPointerCapture?.(e.pointerId);
+    try {
+      e.target.setPointerCapture?.(e.pointerId);
+    } catch (err) {
+      // ignore NotFoundError when pointer capture is not available for synthetic pointers
+    }
   };
 
   const onPointerMove = (e) => {
@@ -167,7 +173,11 @@ function DraggablePoint({
     e.stopPropagation();
     setDragging(false);
     setControlsBusy(false);
-    e.target.releasePointerCapture?.(e.pointerId);
+    try {
+      e.target.releasePointerCapture?.(e.pointerId);
+    } catch (err) {
+      // ignore NotFoundError when pointer capture wasn't set
+    }
   };
 
   return (
@@ -239,6 +249,10 @@ export default function GraphCanvas({
         overflow: "hidden",
       }}
     >
+      {/* Hand input provider: mounted when enabled in preferences */}
+      {useInputPrefs((s) => s.handControlEnabled) && (
+        <HandInputProvider targetRef={wrapperRef} />
+      )}
       <Canvas
         orthographic
         camera={{ zoom: 80, position: [0, 0, 10] }}
@@ -430,8 +444,53 @@ export default function GraphCanvas({
                 : "노란점의 화살표로 이동"}
             </div>
           </div>
+
+          {/* 손가락 카메라 입력 토글 */}
+          <div
+            style={{
+              background: "rgba(0,0,0,0.55)",
+              color: "#fff",
+              padding: "4px 6px",
+              borderRadius: 8,
+              fontSize: 11,
+              lineHeight: 1.2,
+              minWidth: "110px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+            }}
+          >
+            <div style={{ marginBottom: 4, opacity: 0.9 }}>손 입력</div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <HandToggle />
+            </div>
+            <div style={{ marginTop: 6, opacity: 0.8, fontSize: 11 }}>
+              카메라로 손가락을 추적해 드래그/클릭을 흉내냅니다.
+            </div>
+          </div>
         </div>
       )}
     </div>
+  );
+}
+
+function HandToggle() {
+  const enabled = useInputPrefs((s) => s.handControlEnabled);
+  const setEnabled = useInputPrefs((s) => s.setHandControlEnabled);
+  return (
+    <button
+      onClick={() => setEnabled(!enabled)}
+      style={{
+        padding: "6px 8px",
+        borderRadius: 6,
+        border: enabled ? "1px solid #7cf" : "1px solid rgba(255,255,255,0.25)",
+        background: enabled ? "#7cf" : "transparent",
+        color: enabled ? "#000" : "#fff",
+        cursor: "pointer",
+      }}
+      title={enabled ? "손 입력 비활성화" : "손 입력 활성화"}
+    >
+      {enabled ? "활성" : "비활성"}
+    </button>
   );
 }

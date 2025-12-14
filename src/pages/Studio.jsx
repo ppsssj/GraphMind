@@ -103,6 +103,7 @@ function ArrayToolbar({ data, isSplit, setIsSplit }) {
 export default function Studio() {
   const location = useLocation();
   const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
+
   // ✅ Vault에서 불러온 리소스 (localStorage → 없으면 dummyResources)
   const [vaultResources, setVaultResources] = useState(() => {
     try {
@@ -946,6 +947,7 @@ export default function Studio() {
             <div className="pane-content">
               {leftActive && leftActive.type === "equation" ? (
                 leftPack ? (
+                  
                   <GraphView
                     key={`left-${leftActiveId}`}
                     points={leftPack.points}
