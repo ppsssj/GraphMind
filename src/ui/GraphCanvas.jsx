@@ -7,40 +7,60 @@ import * as THREE from "three";
 import { HandInputProvider } from "../input/HandInputProvider";
 import { useInputPrefs } from "../store/useInputPrefs";
 
-/**
- * Hand control behavior (MediaPipe Hands 기반 Provider 전제)
- * - index tip: 커서/드래그 위치
- * - pinch (thumb-index): 드래그 down/up
- * - zoom: Provider가 zoomApiRef.current.zoomBy(delta) 호출
- *
- * Important:
- * - handEnabled=true일 때 OrbitControls를 꺼서 "회전" 간섭을 차단합니다.
- */
+function CameraControlBridge({ cameraApiRef, target = new THREE.Vector3(0, 0, 0) }) {
+  const { camera, viewport } = useThree();
+  const targetRef = useRef(target.clone());
+  const sphericalRef = useRef(new THREE.Spherical());
 
-function CameraZoomBridge({ zoomApiRef, minZoom = 25, maxZoom = 220 }) {
-  const { camera } = useThree();
+  // init spherical from current camera position
+  useEffect(() => {
+    const pos = camera.position.clone().sub(targetRef.current);
+    sphericalRef.current.setFromVector3(pos);
+  }, [camera]);
 
   useEffect(() => {
-    if (!zoomApiRef) return;
+    if (!cameraApiRef) return;
 
-    zoomApiRef.current = {
+    cameraApiRef.current = {
       zoomBy: (delta) => {
-        // delta: +면 줌인, -면 줌아웃 (Provider에서 이 규약대로 호출)
+        // Orthographic zoom: zoom *= (1 + delta)
         const next = camera.zoom * (1 + delta);
-        camera.zoom = Math.max(minZoom, Math.min(maxZoom, next));
+        camera.zoom = Math.max(20, Math.min(260, next));
         camera.updateProjectionMatrix();
       },
-      setZoom: (z) => {
-        camera.zoom = Math.max(minZoom, Math.min(maxZoom, z));
-        camera.updateProjectionMatrix();
+
+      panBy: (dxNorm, dyNorm) => {
+        // dxNorm/dyNorm: screen-normalized delta (0~1 scale)
+        // viewport.width/height already represent world size for current zoom.
+        const dxWorld = -dxNorm * viewport.width;
+        const dyWorld = dyNorm * viewport.height;
+
+        camera.position.x += dxWorld;
+        camera.position.y += dyWorld;
+
+        // also move target with camera (orbit-style panning)
+        targetRef.current.x += dxWorld;
+        targetRef.current.y += dyWorld;
       },
-      getZoom: () => camera.zoom,
+
+      rotateBy: (dYaw, dPitch) => {
+        // rotate around target using spherical coords
+        // dYaw/dPitch are small values
+        const s = sphericalRef.current;
+
+        s.theta += dYaw;                 // yaw
+        s.phi = Math.max(0.15, Math.min(Math.PI - 0.15, s.phi + dPitch)); // pitch clamp
+
+        const v = new THREE.Vector3().setFromSpherical(s).add(targetRef.current);
+        camera.position.copy(v);
+        camera.lookAt(targetRef.current);
+      },
     };
 
     return () => {
-      if (zoomApiRef.current) zoomApiRef.current = null;
+      cameraApiRef.current = null;
     };
-  }, [camera, zoomApiRef, minZoom, maxZoom]);
+  }, [camera, viewport, cameraApiRef]);
 
   return null;
 }
@@ -51,7 +71,6 @@ function Axes({ xmin = -8, xmax = 8, ymin = -8, ymax = 8 }) {
       <axesHelper args={[8]} />
       <gridHelper args={[16, 16]} rotation={[Math.PI / 2, 0, 0]} />
 
-      {/* y=0 */}
       <line>
         <bufferGeometry
           attach="geometry"
@@ -62,7 +81,6 @@ function Axes({ xmin = -8, xmax = 8, ymin = -8, ymax = 8 }) {
         <lineBasicMaterial color="#6039BC" linewidth={3} />
       </line>
 
-      {/* x=0 */}
       <line>
         <bufferGeometry
           attach="geometry"
@@ -86,7 +104,6 @@ function Curve({ fn, xmin, xmax, color = "white" }) {
       const x = xmin + dx * i;
       const yRaw = fn ? fn(x) : NaN;
       const y = Number.isFinite(yRaw) ? yRaw : 0;
-
       const o = i * 3;
       arr[o + 0] = x;
       arr[o + 1] = y;
@@ -110,7 +127,6 @@ function Curve({ fn, xmin, xmax, color = "white" }) {
   );
 }
 
-/* TransformControls(화살표) */
 function EditablePoint({ index, position, onChange, setControlsBusy }) {
   const tcRef = useRef();
 
@@ -129,7 +145,6 @@ function EditablePoint({ index, position, onChange, setControlsBusy }) {
       if (!obj) return;
       onChange(index, { x: obj.position.x, y: obj.position.y });
     };
-
     const onDraggingChanged = (e) => setControlsBusy(!!e.value);
 
     tc.addEventListener("change", handleChange);
@@ -151,13 +166,7 @@ function EditablePoint({ index, position, onChange, setControlsBusy }) {
       </TransformControls>
 
       <group position={[position.x + 0.08, position.y + 0.08, 0]}>
-        <Text
-          fontSize={0.16}
-          anchorX="left"
-          anchorY="bottom"
-          outlineWidth={0.004}
-          outlineColor="black"
-        >
+        <Text fontSize={0.16} anchorX="left" anchorY="bottom" outlineWidth={0.004} outlineColor="black">
           {`(${position.x.toFixed(2)}, ${position.y.toFixed(2)})`}
         </Text>
       </group>
@@ -165,7 +174,6 @@ function EditablePoint({ index, position, onChange, setControlsBusy }) {
   );
 }
 
-/* 점 직접 드래그 */
 function DraggablePoint({ index, position, xmin, xmax, onChange, setControlsBusy }) {
   const plane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), []);
   const hit = useRef(new THREE.Vector3());
@@ -180,14 +188,13 @@ function DraggablePoint({ index, position, xmin, xmax, onChange, setControlsBusy
     setControlsBusy(true);
     try {
       e.target.setPointerCapture?.(e.pointerId);
-    } catch {
-      // synthetic pointer일 수 있으니 무시
-    }
+    } catch {}
   };
 
   const onPointerMove = (e) => {
     if (!dragging) return;
     e.stopPropagation();
+
     if (e.ray.intersectPlane(plane, hit.current)) {
       let x = hit.current.x;
       let y = hit.current.y;
@@ -195,7 +202,6 @@ function DraggablePoint({ index, position, xmin, xmax, onChange, setControlsBusy
       if (Number.isFinite(xmin) && Number.isFinite(xmax)) {
         x = Math.max(xmin, Math.min(xmax, x));
       }
-
       if (Number.isFinite(x) && Number.isFinite(y)) {
         onChange(index, { x, y });
       }
@@ -211,9 +217,7 @@ function DraggablePoint({ index, position, xmin, xmax, onChange, setControlsBusy
     const pid = e.pointerId;
     try {
       if (el?.hasPointerCapture?.(pid)) el.releasePointerCapture(pid);
-    } catch {
-      // NotFoundError 방지
-    }
+    } catch {}
   };
 
   return (
@@ -241,13 +245,7 @@ function DraggablePoint({ index, position, xmin, xmax, onChange, setControlsBusy
       </mesh>
 
       <group position={[position.x + 0.08, position.y + 0.08, 0]}>
-        <Text
-          fontSize={0.16}
-          anchorX="left"
-          anchorY="bottom"
-          outlineWidth={0.004}
-          outlineColor="black"
-        >
+        <Text fontSize={0.16} anchorX="left" anchorY="bottom" outlineWidth={0.004} outlineColor="black">
           {`(${position.x.toFixed(2)}, ${position.y.toFixed(2)})`}
         </Text>
       </group>
@@ -260,28 +258,26 @@ export default function GraphCanvas({
   onPointChange,
   xmin,
   xmax,
-  fn, // 파랑: 다항 근사
-  typedFn, // 빨강: 입력 수식
-  curveKey, // 리마운트 키
+  fn,
+  typedFn,
+  curveKey,
   showControls = true,
 }) {
   const wrapperRef = useRef(null);
-  const zoomApiRef = useRef(null);
+  const cameraApiRef = useRef(null);
 
   const [controlsBusy, setControlsBusy] = useState(false);
 
-  const [viewMode, setViewMode] = useState("both"); // "typed" | "fit" | "both"
+  const [viewMode, setViewMode] = useState("both"); // typed | fit | both
   const showTyped = typedFn && (viewMode === "typed" || viewMode === "both");
   const showFit = fn && (viewMode === "fit" || viewMode === "both");
 
-  const [editMode, setEditMode] = useState("drag"); // "arrows" | "drag"
-
+  const [editMode, setEditMode] = useState("drag"); // arrows | drag
   const handEnabled = useInputPrefs((s) => s.handControlEnabled);
 
   return (
     <div
       ref={wrapperRef}
-      className="graph-canvas-wrap"
       style={{
         position: "relative",
         flex: 1,
@@ -291,11 +287,11 @@ export default function GraphCanvas({
         overflow: "hidden",
       }}
     >
-      {/* ✅ 손 입력: 토글 ON일 때만 MediaPipe Hands Provider 마운트 */}
+      {/* 손 입력(그래프 화면 전용) */}
       {handEnabled && (
         <HandInputProvider
           targetRef={wrapperRef}
-          zoomApiRef={zoomApiRef}
+          cameraApiRef={cameraApiRef}
           enabled={true}
           mirror={true}
           modelPath="/models/hand_landmarker.task"
@@ -306,12 +302,10 @@ export default function GraphCanvas({
         orthographic
         camera={{ zoom: 80, position: [0, 0, 10] }}
         style={{ width: "100%", height: "100%" }}
-        onCreated={({ gl }) => {
-          gl.setClearColor(new THREE.Color("#0f1115"), 1.0);
-        }}
+        onCreated={({ gl }) => gl.setClearColor(new THREE.Color("#0f1115"), 1.0)}
       >
-        {/* ✅ HandInputProvider가 줌을 직접 제어할 수 있게 브릿지 제공 */}
-        <CameraZoomBridge zoomApiRef={zoomApiRef} />
+        {/* 손 제스처가 직접 카메라를 조작할 수 있는 API */}
+        <CameraControlBridge cameraApiRef={cameraApiRef} />
 
         <ambientLight intensity={0.7} />
         <directionalLight position={[3, 5, 6]} intensity={0.9} />
@@ -319,22 +313,10 @@ export default function GraphCanvas({
         <Axes />
 
         {showFit && (
-          <Curve
-            key={curveKey + "|fit"}
-            fn={fn}
-            xmin={xmin}
-            xmax={xmax}
-            color="#64b5f6"
-          />
+          <Curve key={curveKey + "|fit"} fn={fn} xmin={xmin} xmax={xmax} color="#64b5f6" />
         )}
         {showTyped && (
-          <Curve
-            key={curveKey + "|typed"}
-            fn={typedFn}
-            xmin={xmin}
-            xmax={xmax}
-            color="#ff5252"
-          />
+          <Curve key={curveKey + "|typed"} fn={typedFn} xmin={xmin} xmax={xmax} color="#ff5252" />
         )}
 
         {points.map((p, i) =>
@@ -359,11 +341,11 @@ export default function GraphCanvas({
           )
         )}
 
-        {/* ✅ 손 입력 ON이면 회전/줌 간섭 방지 위해 OrbitControls OFF */}
+        {/* 손 모드에서는 OrbitControls를 꺼서 충돌(원치 않는 회전/줌)을 원천 차단 */}
         <OrbitControls makeDefault enabled={!controlsBusy && !handEnabled} />
       </Canvas>
 
-      {/* 우상단 오버레이 */}
+      {/* UI(기존 구성 유지 가능) */}
       {showControls && (
         <div
           style={{
@@ -376,150 +358,38 @@ export default function GraphCanvas({
             alignItems: "flex-start",
             maxWidth: "calc(100% - 16px)",
             boxSizing: "border-box",
-            overflow: "hidden",
           }}
         >
-          {/* 보기 */}
-          <div
-            style={{
-              background: "rgba(0,0,0,0.55)",
-              color: "#fff",
-              padding: "4px 6px",
-              borderRadius: 8,
-              fontSize: 11,
-              lineHeight: 1.2,
-              flex: "1 1 auto",
-              minWidth: "120px",
-            }}
-          >
+          <div style={{ background: "rgba(0,0,0,0.55)", color: "#fff", padding: "6px 8px", borderRadius: 8, fontSize: 11 }}>
+            <div style={{ marginBottom: 6, opacity: 0.9 }}>손 제스처</div>
+            <div style={{ opacity: 0.85, lineHeight: 1.35 }}>
+              • 오른손 핀치: 드래그<br />
+              • 양손 핀치: 줌<br />
+              • 왼손 펼침: 팬<br />
+              • 오른손 주먹: 회전
+            </div>
+          </div>
+
+          <div style={{ background: "rgba(0,0,0,0.55)", color: "#fff", padding: "6px 8px", borderRadius: 8, fontSize: 11 }}>
             <div style={{ marginBottom: 6, opacity: 0.9 }}>보기</div>
             <div style={{ display: "flex", gap: 6 }}>
-              <button
-                onClick={() => setViewMode("typed")}
-                style={{
-                  padding: "4px 6px",
-                  borderRadius: 6,
-                  border: "1px solid rgba(255,255,255,0.25)",
-                  background: viewMode === "typed" ? "#ff5252" : "transparent",
-                  color: viewMode === "typed" ? "#000" : "#fff",
-                  cursor: "pointer",
-                }}
-                title="입력 수식만"
-              >
-                수식만
-              </button>
-              <button
-                onClick={() => setViewMode("fit")}
-                style={{
-                  padding: "4px 6px",
-                  borderRadius: 6,
-                  border: "1px solid rgba(255,255,255,0.25)",
-                  background: viewMode === "fit" ? "#64b5f6" : "transparent",
-                  color: viewMode === "fit" ? "#000" : "#fff",
-                  cursor: "pointer",
-                }}
-                title="다항식 근사만"
-              >
-                근사만
-              </button>
-              <button
-                onClick={() => setViewMode("both")}
-                style={{
-                  padding: "4px 6px",
-                  borderRadius: 6,
-                  border: "1px solid rgba(255,255,255,0.25)",
-                  background: viewMode === "both" ? "#fff" : "transparent",
-                  color: viewMode === "both" ? "#000" : "#fff",
-                  cursor: "pointer",
-                }}
-                title="둘 다 보기"
-              >
-                둘다
-              </button>
-            </div>
-
-            <div style={{ marginTop: 8, opacity: 0.9 }}>
-              <div>
-                <span style={{ color: "#ff5252" }}>■</span> 입력 수식
-              </div>
-              <div>
-                <span style={{ color: "#64b5f6" }}>■</span> 다항 근사
-              </div>
+              <button onClick={() => setViewMode("typed")} style={btnStyle(viewMode === "typed", "#ff5252")}>수식만</button>
+              <button onClick={() => setViewMode("fit")} style={btnStyle(viewMode === "fit", "#64b5f6")}>근사만</button>
+              <button onClick={() => setViewMode("both")} style={btnStyle(viewMode === "both", "#ffffff")}>둘다</button>
             </div>
           </div>
 
-          {/* 편집 */}
-          <div
-            style={{
-              background: "rgba(0,0,0,0.55)",
-              color: "#fff",
-              padding: "4px 6px",
-              borderRadius: 8,
-              fontSize: 11,
-              lineHeight: 1.2,
-              flex: "1 1 auto",
-              minWidth: "120px",
-            }}
-          >
+          <div style={{ background: "rgba(0,0,0,0.55)", color: "#fff", padding: "6px 8px", borderRadius: 8, fontSize: 11 }}>
             <div style={{ marginBottom: 6, opacity: 0.9 }}>편집</div>
             <div style={{ display: "flex", gap: 6 }}>
-              <button
-                onClick={() => setEditMode("arrows")}
-                style={{
-                  padding: "4px 6px",
-                  borderRadius: 6,
-                  border: "1px solid rgba(255,255,255,0.25)",
-                  background: editMode === "arrows" ? "#fff" : "transparent",
-                  color: editMode === "arrows" ? "#000" : "#fff",
-                  cursor: "pointer",
-                }}
-                title="화살표(TransformControls)로 이동"
-              >
-                화살표
-              </button>
-              <button
-                onClick={() => setEditMode("drag")}
-                style={{
-                  padding: "4px 6px",
-                  borderRadius: 6,
-                  border: "1px solid rgba(255,255,255,0.25)",
-                  background: editMode === "drag" ? "#fff" : "transparent",
-                  color: editMode === "drag" ? "#000" : "#fff",
-                  cursor: "pointer",
-                }}
-                title="점 직접 드래그로 이동"
-              >
-                드래그
-              </button>
-            </div>
-            <div style={{ marginTop: 6, opacity: 0.8 }}>
-              {editMode === "drag" ? "점 클릭 후 드래그" : "노란점의 화살표로 이동"}
+              <button onClick={() => setEditMode("arrows")} style={btnStyle(editMode === "arrows", "#ffffff")}>화살표</button>
+              <button onClick={() => setEditMode("drag")} style={btnStyle(editMode === "drag", "#ffffff")}>드래그</button>
             </div>
           </div>
 
-          {/* 손 입력 토글 */}
-          <div
-            style={{
-              background: "rgba(0,0,0,0.55)",
-              color: "#fff",
-              padding: "4px 6px",
-              borderRadius: 8,
-              fontSize: 11,
-              lineHeight: 1.2,
-              minWidth: "130px",
-              display: "flex",
-              flexDirection: "column",
-              gap: 6,
-            }}
-          >
-            <div style={{ marginBottom: 4, opacity: 0.9 }}>손 입력</div>
-            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <HandToggle />
-            </div>
-            <div style={{ marginTop: 6, opacity: 0.8 }}>
-              핀치(엄지-검지)=드래그<br />
-              검지-중지 거리=줌
-            </div>
+          <div style={{ background: "rgba(0,0,0,0.55)", color: "#fff", padding: "6px 8px", borderRadius: 8, fontSize: 11 }}>
+            <div style={{ marginBottom: 6, opacity: 0.9 }}>손 입력</div>
+            <HandToggle />
           </div>
         </div>
       )}
@@ -527,10 +397,20 @@ export default function GraphCanvas({
   );
 }
 
+function btnStyle(active, activeColor) {
+  return {
+    padding: "4px 6px",
+    borderRadius: 6,
+    border: "1px solid rgba(255,255,255,0.25)",
+    background: active ? activeColor : "transparent",
+    color: active ? "#000" : "#fff",
+    cursor: "pointer",
+  };
+}
+
 function HandToggle() {
   const enabled = useInputPrefs((s) => s.handControlEnabled);
   const setEnabled = useInputPrefs((s) => s.setHandControlEnabled);
-
   return (
     <button
       onClick={() => setEnabled(!enabled)}
