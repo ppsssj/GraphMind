@@ -6,12 +6,36 @@ const TABS = [
   { id: "explain", label: "그래프 설명" },
   { id: "equation", label: "수식 도우미" },
   { id: "chat", label: "질문하기" },
+  { id: "control", label: "그래프 조작" },
 ];
 
 // 프록시 서버 엔드포인트 (ai-proxy-server.js)
 const PROXY_API_URL = "http://localhost:4000/api/ai/chat";
 
-const AIPanel = ({ isOpen, onClose, currentContext }) => {
+function extractJsonFromText(text) {
+  if (!text) return null;
+
+  // ```json ... ```
+  const fenced = text.match(/```json\s*([\s\S]*?)\s*```/i);
+  if (fenced?.[1]) {
+    try {
+      return JSON.parse(fenced[1]);
+    } catch {}
+  }
+
+  // first { ... } block
+  const firstObj = text.match(/\{[\s\S]*\}/);
+  if (firstObj?.[0]) {
+    try {
+      return JSON.parse(firstObj[0]);
+    } catch {}
+  }
+
+  return null;
+}
+
+
+const AIPanel = ({ isOpen, onClose, currentContext, onCommand }) => {
   const [activeTab, setActiveTab] = useState("explain");
   const [inputText, setInputText] = useState("");
   const [resultText, setResultText] = useState("");
@@ -71,12 +95,15 @@ const AIPanel = ({ isOpen, onClose, currentContext }) => {
         data.choices?.[0]?.message?.content ?? JSON.stringify(data, null, 2);
 
       setResultText(content);
+      return content;
     } catch (err) {
       console.error(err);
       setResultText(`요청 실패: ${err.message}`);
+      return null;
     } finally {
       setIsLoading(false);
     }
+    return null;
   };
 
   // ====== 탭별 액션 ======
@@ -214,7 +241,48 @@ const AIPanel = ({ isOpen, onClose, currentContext }) => {
     }));
   };
 
-  const renderExplainTab = () => {
+  
+  // 그래프 조작 탭 — JSON 커맨드로 그래프에 변화를 적용
+  const handleControl = async () => {
+    const ctx = (localEdit && localEdit.type ? localEdit : debouncedContext) || { type: null };
+
+    const messages = [
+      {
+        role: "developer",
+        content:
+          "너는 GraphMind의 그래프 조작 커맨드 생성기다. 반드시 JSON만 출력한다. " +
+          "스키마(반드시 준수): " +
+          "{\"type\":\"graph_command\",\"message\":\"...\",\"commands\":[{\"action\":\"mark_max|mark_min|mark_roots|mark_intersections|clear_markers\",\"target\":\"typed|fit\",\"args\":{\"samples\":2500}}]} " +
+          "설명/문장/코드블록 없이 JSON만 출력한다."
+      },
+      {
+        role: "user",
+        content:
+          "컨텍스트: " + JSON.stringify(ctx) + "\n" +
+          "사용자 입력: " + String(inputText || "") + "\n" +
+          "위 스키마의 JSON만 출력해."
+      },
+    ];
+
+    const content = await callLLM(messages);
+    const parsed = extractJsonFromText(content);
+
+    if (parsed && typeof parsed === "object") {
+      // message만 화면에 보여주기
+      if (parsed.message) setResultText(String(parsed.message));
+
+      // Studio로 커맨드 전달
+      if (typeof onCommand === "function") {
+        onCommand({
+          ...parsed,
+          tabId: ctx?.tabId ?? parsed.tabId ?? null,
+          pane: ctx?.pane ?? parsed.pane ?? null,
+        });
+      }
+    }
+  };
+
+const renderExplainTab = () => {
     const baseCtx = localEdit && localEdit.type ? localEdit : debouncedContext;
     const ctx = baseCtx || { type: null };
     const empty = !ctx || !ctx.type;
@@ -485,6 +553,33 @@ const AIPanel = ({ isOpen, onClose, currentContext }) => {
   );
 
   if (!isOpen) return null;
+  const renderControlTab = () => (
+    <div className="ai-panel-section">
+      <div className="ai-panel-section-title">그래프 조작</div>
+
+      <textarea
+        className="ai-panel-textarea"
+        rows={5}
+        value={inputText}
+        onChange={(e) => setInputText(e.target.value)}
+        placeholder={'예) 최대값 표시해줘\n예) 근(roots)을 표시해줘\n예) 파란선과 빨간선의 교점을 표시해줘'}
+      />
+
+      <button
+        className="ai-panel-primary-btn"
+        onClick={handleControl}
+        disabled={isLoading}
+      >
+        {isLoading ? "처리 중..." : "커맨드 실행"}
+      </button>
+
+      <div className="ai-panel-result">
+        {resultText ? <pre className="ai-panel-pre">{resultText}</pre> : <div className="ai-panel-muted">결과가 여기에 표시됩니다.</div>}
+      </div>
+    </div>
+  );
+
+
 
   return (
     <>
@@ -520,6 +615,7 @@ const AIPanel = ({ isOpen, onClose, currentContext }) => {
           {activeTab === "explain" && renderExplainTab()}
           {activeTab === "equation" && renderEquationTab()}
           {activeTab === "chat" && renderChatTab()}
+          {activeTab === "control" && renderControlTab()}
         </div>
 
         <footer className="ai-panel-footer">

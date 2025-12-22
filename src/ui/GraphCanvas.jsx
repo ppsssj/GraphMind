@@ -280,6 +280,7 @@ export default function GraphCanvas({
   fn,
   typedFn,
   curveKey,
+  markers = [],
 
   ruleMode = "free",
   setRuleMode,
@@ -372,6 +373,32 @@ export default function GraphCanvas({
         {showTyped && (
           <Curve key={curveKey + "|typed"} fn={typedFn} xmin={xmin} xmax={xmax} color="#ff5252" />
         )}
+
+
+        {/* AI markers (max/min/roots/...) */}
+        {Array.isArray(markers) &&
+          markers.map((m) => (
+            <group key={m.id ?? `${m.kind}-${m.x}-${m.y}`}>
+              <mesh position={[m.x, m.y, 0.03]}>
+                <sphereGeometry args={[0.12, 24, 24]} />
+                <meshStandardMaterial color="#00e676" emissive="#00e676" emissiveIntensity={0.25} />
+              </mesh>
+              {m.label && (
+                <group position={[m.x + 0.16, m.y + 0.16, 0.03]}>
+                  <Text
+                    fontSize={0.18}
+                    anchorX="left"
+                    anchorY="bottom"
+                    outlineWidth={0.004}
+                    outlineColor="black"
+                  >
+                    {m.label}
+                  </Text>
+                </group>
+              )}
+            </group>
+          ))}
+
 
         {points.map((p, i) =>
           editMode === "arrows" ? (

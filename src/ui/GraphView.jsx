@@ -2,45 +2,50 @@
 import GraphCanvas from "./GraphCanvas";
 
 export default function GraphView({
-  points,
+  points = [],
   updatePoint,
   commitRule,
   xmin,
   xmax,
+  ymin,
+  ymax,
   gridStep,
   setGridStep,
   fittedFn,
   typedFn,
   curveKey,
+  markers = [],
 
   // rule editing (optional)
-  ruleMode,
+  ruleMode = "free",
   setRuleMode,
-  rulePolyDegree,
+  rulePolyDegree = 3,
   setRulePolyDegree,
   ruleError,
+  showControls = true,
 }) {
   return (
-    <div
-      className="graph-view"
-      style={{ flex: 1, minHeight: 0, width: "100%", height: "100%", display: "flex" }}
-    >
+    <div className="graph-view" style={{ width: "100%", height: "100%", minHeight: 0 }}>
       <GraphCanvas
         points={points}
         onPointChange={updatePoint}
-        onPointCommit={(pts) => commitRule?.(pts)}
+        onPointCommit={commitRule}
         xmin={xmin}
         xmax={xmax}
+        ymin={ymin}
+        ymax={ymax}
         gridStep={gridStep}
         setGridStep={setGridStep}
         fn={fittedFn}     // 파랑: 다항 근사
         typedFn={typedFn} // 빨강: 입력 수식
         curveKey={curveKey}
+        markers={markers}
         ruleMode={ruleMode}
         setRuleMode={setRuleMode}
         rulePolyDegree={rulePolyDegree}
         setRulePolyDegree={setRulePolyDegree}
         ruleError={ruleError}
+        showControls={showControls}
       />
     </div>
   );

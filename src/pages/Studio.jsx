@@ -505,7 +505,7 @@ export default function Studio() {
       surface3d: initialType === "surface3d" ? initialSurface3d : undefined,
       xmin: -8,
       xmax: 8,
-      gridStep: 2,
+      gridStep: 1,
       degree: 3,
       ruleMode: "free",
       rulePolyDegree: 3,
@@ -514,6 +514,7 @@ export default function Studio() {
         initialType === "equation" ? makeInitialPoints(initialFormula) : [],
       ver: 0,
       vaultId: initialVaultId,
+      markers: [],
     },
   }));
 
@@ -655,7 +656,7 @@ export default function Studio() {
         fittedFn: coeffsToFn(coeffs),
         xmin: s.xmin,
         xmax: s.xmax,
-        gridStep: s.gridStep ?? 2,
+        gridStep: s.gridStep ?? 1,
         setGridStep: (v) =>
           setTabState((st) => ({
             ...st,
@@ -683,6 +684,231 @@ export default function Studio() {
     },
     [tabState, updateVaultFormula]
   );
+
+
+  // ── AI graph commands: extrema/roots/intersections → markers ─────────────────
+  const sampleExtremum = (fn, xmin, xmax, samples = 2500, kind = "max") => {
+    const lo = Number(xmin), hi = Number(xmax);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) return null;
+    const a = Math.min(lo, hi);
+    const b = Math.max(lo, hi);
+
+    let bestX = a;
+    let bestY = kind === "min" ? Infinity : -Infinity;
+
+    for (let i = 0; i <= samples; i++) {
+      const t = i / samples;
+      const x = a + (b - a) * t;
+      const y = fn ? fn(x) : NaN;
+      if (!Number.isFinite(y)) continue;
+
+      if (kind === "min") {
+        if (y < bestY) {
+          bestY = y;
+          bestX = x;
+        }
+      } else {
+        if (y > bestY) {
+          bestY = y;
+          bestX = x;
+        }
+      }
+    }
+    if (!Number.isFinite(bestY)) return null;
+    return { x: bestX, y: bestY };
+  };
+
+  const bisectRoot = (fn, a, b, maxIter = 60, tol = 1e-6) => {
+    let fa = fn(a), fb = fn(b);
+    if (!Number.isFinite(fa) || !Number.isFinite(fb)) return null;
+    if (fa === 0) return a;
+    if (fb === 0) return b;
+    if (fa * fb > 0) return null;
+
+    let lo = a, hi = b;
+    for (let i = 0; i < maxIter; i++) {
+      const mid = (lo + hi) / 2;
+      const fm = fn(mid);
+      if (!Number.isFinite(fm)) return null;
+      if (Math.abs(fm) < tol) return mid;
+      if (fa * fm <= 0) {
+        hi = mid;
+        fb = fm;
+      } else {
+        lo = mid;
+        fa = fm;
+      }
+    }
+    return (lo + hi) / 2;
+  };
+
+  const findRoots = (fn, xmin, xmax, samples = 2500, maxRoots = 12) => {
+    const lo = Number(xmin), hi = Number(xmax);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) return [];
+    const a = Math.min(lo, hi);
+    const b = Math.max(lo, hi);
+
+    const roots = [];
+    let prevX = a;
+    let prevY = fn(prevX);
+    for (let i = 1; i <= samples; i++) {
+      const t = i / samples;
+      const x = a + (b - a) * t;
+      const y = fn(x);
+
+      if (Number.isFinite(prevY) && Number.isFinite(y)) {
+        // sign change or exact zero
+        if (prevY === 0) {
+          roots.push(prevX);
+        } else if (y === 0) {
+          roots.push(x);
+        } else if (prevY * y < 0) {
+          const r = bisectRoot(fn, prevX, x);
+          if (r !== null) roots.push(r);
+        }
+      }
+
+      prevX = x;
+      prevY = y;
+
+      if (roots.length >= maxRoots) break;
+    }
+
+    // de-dup (close roots)
+    roots.sort((p, q) => p - q);
+    const dedup = [];
+    for (const r of roots) {
+      if (!dedup.length || Math.abs(r - dedup[dedup.length - 1]) > 1e-3) dedup.push(r);
+    }
+    return dedup.slice(0, maxRoots);
+  };
+
+  const handleAICommand = useCallback(
+    (payload) => {
+      if (!payload) return;
+
+      // normalize to command list
+      const commands = [];
+      if (payload.type === "graph_command" && Array.isArray(payload.commands)) {
+        commands.push(...payload.commands);
+      } else if (payload.action) {
+        commands.push({
+          action: payload.action,
+          target: payload.target,
+          args: payload.args ?? {},
+        });
+      } else {
+        return;
+      }
+
+      const paneKey =
+        payload.pane === "left" || payload.pane === "right"
+          ? payload.pane
+          : focusedPane;
+
+      const tabId =
+        payload.tabId ||
+        panes?.[paneKey]?.activeId ||
+        panes?.[focusedPane]?.activeId;
+
+      if (!tabId) return;
+
+      const pack = deriveFor(tabId);
+      if (!pack) return;
+
+      const pickFn = (target) => (target === "fit" ? pack.fittedFn : pack.typedFn);
+      const xmin = pack.xmin;
+      const xmax = pack.xmax;
+
+      const nextMarkers = [];
+
+      for (const c of commands) {
+        const action = c.action;
+        const target = c.target === "fit" ? "fit" : "typed";
+        const fn = pickFn(target);
+        const args = c.args ?? {};
+        const samples = Number(args.samples) || 2500;
+
+        if (action === "clear_markers") {
+          nextMarkers.length = 0;
+          continue;
+        }
+
+        if (action === "mark_max" || action === "find_max") {
+          const max = sampleExtremum(fn, xmin, xmax, samples, "max");
+          if (max) {
+            nextMarkers.push({
+              id: `max-${Date.now()}`,
+              kind: "max",
+              x: max.x,
+              y: max.y,
+              label: `max (${max.x.toFixed(2)}, ${max.y.toFixed(2)})`,
+            });
+          }
+          continue;
+        }
+
+        if (action === "mark_min" || action === "find_min") {
+          const min = sampleExtremum(fn, xmin, xmax, samples, "min");
+          if (min) {
+            nextMarkers.push({
+              id: `min-${Date.now()}`,
+              kind: "min",
+              x: min.x,
+              y: min.y,
+              label: `min (${min.x.toFixed(2)}, ${min.y.toFixed(2)})`,
+            });
+          }
+          continue;
+        }
+
+        if (action === "mark_roots" || action === "find_roots") {
+          const roots = findRoots(fn, xmin, xmax, samples, Number(args.maxRoots) || 12);
+          roots.forEach((r, idx) => {
+            const y = fn(r);
+            if (!Number.isFinite(y)) return;
+            nextMarkers.push({
+              id: `root-${Date.now()}-${idx}`,
+              kind: "root",
+              x: r,
+              y,
+              label: `root (${r.toFixed(2)}, ${y.toFixed(2)})`,
+            });
+          });
+          continue;
+        }
+
+        if (action === "mark_intersections" || action === "find_intersections") {
+          const other = target === "fit" ? pack.typedFn : pack.fittedFn;
+          const diff = (x) => fn(x) - other(x);
+          const xs = findRoots(diff, xmin, xmax, samples, Number(args.maxIntersections) || 12);
+          xs.forEach((x, idx) => {
+            const y = fn(x);
+            if (!Number.isFinite(y)) return;
+            nextMarkers.push({
+              id: `ix-${Date.now()}-${idx}`,
+              kind: "intersection",
+              x,
+              y,
+              label: `∩ (${x.toFixed(2)}, ${y.toFixed(2)})`,
+            });
+          });
+          continue;
+        }
+      }
+
+      setTabState((st) => ({
+        ...st,
+        [tabId]: {
+          ...st[tabId],
+          markers: nextMarkers,
+          ver: (st[tabId].ver ?? 0) + 1,
+        },
+      }));
+    },
+    [deriveFor, focusedPane, panes]
+  );
+
 
   const leftActiveId = panes.left.activeId;
   const rightActiveId = panes.right.activeId;
@@ -797,7 +1023,7 @@ export default function Studio() {
           surface3d: type === "surface3d" ? surface3dInit : undefined, // ✅ 추가
           xmin: -8,
           xmax: 8,
-          gridStep: 2,
+          gridStep: 1,
           degree: 3,
           ruleMode: "free",
           rulePolyDegree: 3,
@@ -805,6 +1031,7 @@ export default function Studio() {
           points: type === "equation" ? makeInitialPoints(eq) : [],
           ver: 0,
           vaultId,
+          markers: [],
         },
       }));
 
@@ -1016,7 +1243,7 @@ export default function Studio() {
           xmin: s.xmin,
           xmax: s.xmax,
           
-      gridStep: s.gridStep ?? 2,
+      gridStep: s.gridStep ?? 1,
 degree: s.degree,
           points: s.points,
         };
@@ -1324,9 +1551,12 @@ degree: s.degree,
                     updatePoint={leftPack.updatePoint}
                     xmin={leftPack.xmin}
                     xmax={leftPack.xmax}
+                    gridStep={leftPack.gridStep}
+                    setGridStep={leftPack.setGridStep}
                     fittedFn={leftPack.fittedFn}
                     typedFn={leftPack.typedFn}
                     curveKey={leftPack.curveKey}
+                    markers={leftActive?.markers ?? []}
                     commitRule={leftPack.commitRule}
                     ruleMode={leftPack.ruleMode}
                     setRuleMode={leftPack.setRuleMode}
@@ -1390,6 +1620,7 @@ degree: s.degree,
                         fittedFn={rightPack.fittedFn}
                         typedFn={rightPack.typedFn}
                         curveKey={rightPack.curveKey}
+                    markers={rightActive?.markers ?? []}
                         commitRule={rightPack.commitRule}
                         ruleMode={rightPack.ruleMode}
                         setRuleMode={rightPack.setRuleMode}
@@ -1456,6 +1687,7 @@ degree: s.degree,
         isOpen={isAIPanelOpen}
         onClose={() => setIsAIPanelOpen(false)}
         currentContext={currentContext}
+        onCommand={handleAICommand}
       />
     </div>
   );
