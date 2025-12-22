@@ -1,16 +1,49 @@
-// src/components/RightPane/AIPanel.jsx
-import React, { useState, useEffect } from "react";
+// src/components/ai/AIPanel.jsx
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import "../../styles/AIPanel.css";
+
+// 프록시 서버 엔드포인트 (ai-proxy-server.js)
+const PROXY_API_URL = "http://localhost:4000/api/ai/chat";
+
+/**
+ * AIPanel (with History + Graph Commands)
+ *
+ * - History is persisted in localStorage (global + per-tab).
+ * - "그래프 조작" 탭: LLM은 "JSON만" 반환 → 파싱 성공 시 onCommand(cmd) 호출.
+ *
+ * Expected onCommand payload (Studio에서 처리):
+ * {
+ *   action: "mark_max"|"mark_min"|"mark_roots"|"mark_intersections"|"clear_markers"|"none",
+ *   target?: "typed"|"fit",
+ *   args?: { ... },
+ *   message?: string,
+ *   tabId?: string,
+ *   type?: string
+ * }
+ */
 
 const TABS = [
   { id: "explain", label: "그래프 설명" },
   { id: "equation", label: "수식 도우미" },
   { id: "chat", label: "질문하기" },
   { id: "control", label: "그래프 조작" },
+  { id: "history", label: "History" },
 ];
 
-// 프록시 서버 엔드포인트 (ai-proxy-server.js)
-const PROXY_API_URL = "http://localhost:4000/api/ai/chat";
+const GLOBAL_HISTORY_KEY = "gm_ai_history:all";
+const TAB_HISTORY_KEY = (ctx) => `gm_ai_history:${ctx?.type ?? "none"}:${ctx?.tabId ?? "none"}`;
+
+function nowISO() {
+  return new Date().toISOString();
+}
+
+function safeJsonStringify(v) {
+  try {
+    return JSON.stringify(v, null, 2);
+  } catch {
+    return String(v);
+  }
+}
 
 function extractJsonFromText(text) {
   if (!text) return null;
@@ -23,64 +56,153 @@ function extractJsonFromText(text) {
     } catch {}
   }
 
-  // first { ... } block
+  // first {...}
   const firstObj = text.match(/\{[\s\S]*\}/);
   if (firstObj?.[0]) {
     try {
       return JSON.parse(firstObj[0]);
     } catch {}
   }
-
   return null;
 }
 
+function normalizeCmd(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  const action = String(obj.action ?? "none");
+  const target = obj.target ? String(obj.target) : undefined;
+  const args = obj.args && typeof obj.args === "object" ? obj.args : undefined;
+  const message = obj.message ? String(obj.message) : undefined;
 
-const AIPanel = ({ isOpen, onClose, currentContext, onCommand }) => {
+  const allowed = new Set([
+    "none",
+    "mark_max",
+    "mark_min",
+    "mark_roots",
+    "mark_intersections",
+    "clear_markers",
+  ]);
+  if (!allowed.has(action)) return null;
+
+  return { action, target, args, message };
+}
+
+function buildContextPrefix(ctx) {
+  if (!ctx) return "";
+
+  if (ctx.type === "equation") {
+    return `현재 탭: ${ctx.title ?? "(untitled)"} (tabId:${ctx.tabId ?? "-"})\n수식: ${ctx.equation}\n도메인: [${ctx.xmin}, ${ctx.xmax}]\n\n`;
+  }
+  if (ctx.type === "curve3d") {
+    return `현재 3D 곡선: ${ctx.title ?? "(untitled)"} (tabId:${ctx.tabId ?? "-"})\nx(t): ${ctx.xExpr}\ny(t): ${ctx.yExpr}\nz(t): ${ctx.zExpr}\n\n`;
+  }
+  if (ctx.type === "array3d") {
+    return `현재 3D 배열: ${ctx.title ?? "(untitled)"} (tabId:${ctx.tabId ?? "-"})\n(배열 본문은 생략)\n\n`;
+  }
+  return `현재 탭: ${ctx.title ?? "(untitled)"} (tabId:${ctx.tabId ?? "-"})\n\n`;
+}
+
+export default function AIPanel({ isOpen, onClose, currentContext, onCommand }) {
   const [activeTab, setActiveTab] = useState("explain");
   const [inputText, setInputText] = useState("");
   const [resultText, setResultText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  // 디바운스된 컨텍스트 — 탭 변경 시 잠깐 대기
-  const [debouncedContext, setDebouncedContext] = useState(
-    currentContext || { type: null }
-  );
-  // 패널 내부에서 사용자가 편집 가능한 로컬 폼 상태
-  const [localEdit, setLocalEdit] = useState(currentContext || {});
+  // context local edit
+  const [localEdit, setLocalEdit] = useState(null);
+  const [debouncedContext, setDebouncedContext] = useState(currentContext);
 
-  // 패널이 열릴 때마다 기본 상태 초기화
-  useEffect(() => {
-    if (isOpen) {
-      setActiveTab("explain");
-      setInputText("");
-      setResultText("");
-      setIsLoading(false);
-    }
-  }, [isOpen]);
+  // history
+  const [historyScope, setHistoryScope] = useState("tab"); // "tab" | "all"
+  const [history, setHistory] = useState([]);
 
-  // currentContext 변화에 대해 디바운스 적용 (300ms)
+  const ctxForKey = localEdit || debouncedContext || { type: "none", tabId: "none" };
+  const tabKey = TAB_HISTORY_KEY(ctxForKey);
+
+  // load/save history
   useEffect(() => {
-    const t = setTimeout(() => {
-      const next = currentContext || { type: null };
-      setDebouncedContext(next);
-      setLocalEdit(next);
-    }, 300);
+    setLocalEdit(currentContext ? JSON.parse(JSON.stringify(currentContext)) : null);
+    const t = setTimeout(() => setDebouncedContext(currentContext), 250);
     return () => clearTimeout(t);
   }, [currentContext]);
 
-  // 공통 LLM 호출 함수 (프록시 서버 호출)
-  const callLLM = async (messages, model = "gpt-5-chat-latest") => {
+  useEffect(() => {
+    // load history when panel opens or scope/context changes
+    if (!isOpen) return;
+    const key = historyScope === "all" ? GLOBAL_HISTORY_KEY : tabKey;
+    try {
+      const raw = localStorage.getItem(key);
+      const arr = raw ? JSON.parse(raw) : [];
+      setHistory(Array.isArray(arr) ? arr : []);
+    } catch {
+      setHistory([]);
+    }
+  }, [isOpen, historyScope, tabKey]);
+
+  const persistHistory = (next) => {
+    const key = historyScope === "all" ? GLOBAL_HISTORY_KEY : tabKey;
+    try {
+      localStorage.setItem(key, JSON.stringify(next));
+    } catch {}
+    setHistory(next);
+  };
+
+  const appendHistoryBoth = (entry) => {
+    // save into tab history
+    try {
+      const rawTab = localStorage.getItem(tabKey);
+      const tabArr = rawTab ? JSON.parse(rawTab) : [];
+      const nextTab = [entry, ...(Array.isArray(tabArr) ? tabArr : [])].slice(0, 200);
+      localStorage.setItem(tabKey, JSON.stringify(nextTab));
+      if (historyScope === "tab") setHistory(nextTab);
+    } catch {}
+
+    // save into global history
+    try {
+      const rawAll = localStorage.getItem(GLOBAL_HISTORY_KEY);
+      const allArr = rawAll ? JSON.parse(rawAll) : [];
+      const nextAll = [entry, ...(Array.isArray(allArr) ? allArr : [])].slice(0, 500);
+      localStorage.setItem(GLOBAL_HISTORY_KEY, JSON.stringify(nextAll));
+      if (historyScope === "all") setHistory(nextAll);
+    } catch {}
+  };
+
+  const clearHistory = () => {
+    const key = historyScope === "all" ? GLOBAL_HISTORY_KEY : tabKey;
+    try {
+      localStorage.removeItem(key);
+    } catch {}
+    setHistory([]);
+  };
+
+  const restoreFromEntry = (e) => {
+    if (!e) return;
+    setActiveTab(e.tab ?? "chat");
+    setInputText(e.input ?? "");
+    setResultText(e.output ?? "");
+  };
+
+  // LLM call
+  const callLLM = async (messages, meta = {}) => {
     setIsLoading(true);
     setResultText("");
+
+    const ctx = localEdit || debouncedContext || { type: null };
+    const entryBase = {
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      ts: nowISO(),
+      tabId: ctx?.tabId ?? null,
+      ctxType: ctx?.type ?? null,
+      ctxTitle: ctx?.title ?? null,
+      tab: meta.tab ?? activeTab,
+      input: meta.input ?? inputText,
+    };
 
     try {
       const res = await fetch(PROXY_API_URL, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model,
+          model: "gpt-5-chat-latest",
           messages,
         }),
       });
@@ -91,503 +213,149 @@ const AIPanel = ({ isOpen, onClose, currentContext, onCommand }) => {
       }
 
       const data = await res.json();
-      const content =
-        data.choices?.[0]?.message?.content ?? JSON.stringify(data, null, 2);
+      const content = data?.choices?.[0]?.message?.content ?? safeJsonStringify(data);
 
-      setResultText(content);
-      return content;
+      // command?
+      const parsed = normalizeCmd(extractJsonFromText(content));
+
+      // show message or raw
+      const outputText = parsed?.message ? parsed.message : content;
+      setResultText(outputText);
+
+      // append history
+      appendHistoryBoth({
+        ...entryBase,
+        output: outputText,
+        raw: content,
+        parsed,
+      });
+
+      // execute command
+      if (parsed && parsed.action !== "none" && typeof onCommand === "function") {
+        onCommand({
+          ...parsed,
+          tabId: ctx?.tabId ?? null,
+          type: ctx?.type ?? null,
+        });
+      }
     } catch (err) {
-      console.error(err);
-      setResultText(`요청 실패: ${err.message}`);
-      return null;
+      const msg = String(err?.message ?? err);
+      setResultText(msg);
+      appendHistoryBoth({
+        ...entryBase,
+        output: msg,
+        raw: msg,
+        parsed: null,
+      });
     } finally {
       setIsLoading(false);
     }
-    return null;
   };
 
-  // ====== 탭별 액션 ======
+  const ctx = localEdit || debouncedContext || { type: null };
+  const prefix = buildContextPrefix(ctx);
 
-  // 그래프 설명 탭 — 탭 타입에 따라 더 자세한 컨텍스트 포함
+  // handlers
   const handleExplainGraph = () => {
-    const ctx = localEdit || debouncedContext || { type: null };
-    if (!ctx || !ctx.type) {
-      setResultText("현재 탭에 연결된 수식/리소스가 없습니다.");
-      return;
-    }
-
-    let userContent = `탭: ${ctx.title ?? "(untitled)"} (id: ${
-      ctx.tabId ?? "-"
-    })\n유형: ${ctx.type}\n`;
-
-    if (ctx.type === "equation") {
-      userContent += `수식: ${ctx.equation}\n도메인: [${ctx.xmin}, ${
-        ctx.xmax
-      }]\n차수(설정): ${ctx.degree}\n샘플 포인트: ${
-        Array.isArray(ctx.points) ? ctx.points.length : 0
-      }개\n`;
-      userContent +=
-        "이 그래프의 전반적 형태(증가/감소, 극값, 대칭성, 정의역/치역 등)를 한국어로 쉽게 설명해줘.";
-    } else if (ctx.type === "curve3d") {
-      userContent += `x(t): ${ctx.xExpr}\ny(t): ${ctx.yExpr}\nz(t): ${
-        ctx.zExpr
-      }\n t ∈ [${ctx.tMin}, ${ctx.tMax}] (샘플: ${
-        ctx.samples
-      })\n`;
-      userContent +=
-        "3D 곡선의 형태, 주요 특징, 좌표별(특히 z축) 변화 포인트를 한국어로 설명해줘.";
-    } else if (ctx.type === "array3d") {
-      const dims =
-        ctx.content && ctx.content.length
-          ? `${ctx.content[0][0]?.length ?? 0}×${
-              ctx.content[0]?.length ?? 0
-            }×${ctx.content.length}`
-          : "unknown";
-      userContent += `3D 배열 치수(approx): ${dims}\n간단한 요약(예: 평균/최댓값/비어있는 셀 비율)을 알려줘.`;
-    } else {
-      userContent += "이 리소스에 대해 요약/설명을 제공해줘.";
-    }
-
     const messages = [
       {
         role: "developer",
         content:
-          "너는 수학 학습을 도와주는 튜터야. 사용자가 보고 있는 그래프/리소스의 특징을 상황에 맞게 한국어로 쉽게 설명해 줘.",
-      },
-      { role: "user", content: userContent },
-    ];
-
-    callLLM(messages);
-  };
-
-  // 수식 도우미 탭
-  const handleEquationHelp = () => {
-    if (!inputText.trim()) {
-      setResultText("먼저 수식을 입력해 주세요.");
-      return;
-    }
-
-    const messages = [
-      {
-        role: "developer",
-        content:
-          "너는 수식을 정리해 주는 도우미야. 사용자가 입력한 수식의 문법 오류를 찾고, " +
-          "같은 의미를 가지면서 더 깔끔한 형태의 표현을 1~2개 정도 제안해 줘. " +
-          "필요하다면 간단한 설명도 한국어로 덧붙여 줘.",
+          "너는 수학 학습용 설명가다. 사용자의 현재 그래프/탭 정보를 바탕으로 의미, 핵심 성질, 관찰 포인트를 한국어로 명확히 정리해라.",
       },
       {
         role: "user",
-        content:
-          "다음 수식을 검토해서 문법 오류가 있으면 알려주고, " +
-          "동일 의미의 더 깔끔한 표현을 제안해 줘.\n\n" +
-          inputText,
+        content: prefix + "아래 그래프(또는 탭) 정보를 설명해줘.\n\n" + safeJsonStringify(ctx),
       },
     ];
-
-    callLLM(messages);
+    callLLM(messages, { tab: "explain", input: safeJsonStringify(ctx) });
   };
 
-  // 질문하기 탭
+  const handleEquation = () => {
+    const messages = [
+      {
+        role: "developer",
+        content:
+          "너는 수식 정리 도우미다. 사용자가 준 수식을 표준 형태로 정리하고, 문법/연산자 우선순위를 설명해라. 한국어로 답해라.",
+      },
+      { role: "user", content: prefix + "수식:\n" + inputText },
+    ];
+    callLLM(messages, { tab: "equation", input: inputText });
+  };
+
   const handleChat = () => {
+    const messages = [
+      {
+        role: "developer",
+        content:
+          "너는 수학 Q&A 튜터다. 사용자의 질문에 관련 개념을 예시와 함께 한국어로 설명해라. 필요하면 단계적으로 풀어줘.",
+      },
+      { role: "user", content: prefix + "질문:\n" + inputText },
+    ];
+    callLLM(messages, { tab: "chat", input: inputText });
+  };
+
+  const handleControl = () => {
     if (!inputText.trim()) {
-      setResultText("질문 내용을 먼저 입력해 주세요.");
+      setResultText("요청을 입력해 주세요. 예) '최대값 표시해줘', '근 표시해줘', '교점 표시해줘', '마커 지워줘'");
       return;
     }
 
-    const ctx = localEdit || debouncedContext || { type: null };
-    let prefix = "";
-
-    if (ctx && ctx.type) {
-      if (ctx.type === "equation") {
-        prefix = `현재 보고 있는 탭: ${
-          ctx.title ?? "(untitled)"
-        } (id:${ctx.tabId ?? "-"})\n수식: ${
-          ctx.equation
-        }\n도메인: [${ctx.xmin}, ${ctx.xmax}]\n\n`;
-      } else if (ctx.type === "curve3d") {
-        prefix = `현재 보고 있는 3D 곡선: ${
-          ctx.title ?? "(untitled)"
-        } (id:${ctx.tabId ?? "-"})\nx(t): ${ctx.xExpr}\ny(t): ${
-          ctx.yExpr
-        }\nz(t): ${ctx.zExpr}\n\n`;
-      } else if (ctx.type === "array3d") {
-        prefix = `현재 보고 있는 3D 배열: ${
-          ctx.title ?? "(untitled)"
-        } (id:${ctx.tabId ?? "-"})\n간단한 요약을 참고해서 질문을 답해줘.\n\n`;
-      }
-    }
-
     const messages = [
       {
         role: "developer",
-        content:
-          "너는 수학 학습용 Q&A 튜터야. 사용자의 질문에 대해 관련 개념을 예시와 함께 한국어로 자세히 설명해 줘. 가능한 한 고등학교~대학 초반 수준으로 설명해 줘.",
+        content: `
+You are GraphMind Command Extractor.
+Return ONLY ONE JSON object. No markdown. No commentary.
+
+Schema:
+{
+  "action": "none|mark_max|mark_min|mark_roots|mark_intersections|clear_markers",
+  "target": "typed|fit",
+  "args": { "samples"?: number, "maxCount"?: number, "tol"?: number },
+  "message": "Korean short status message"
+}
+
+Rules:
+- "최대값/최댓값" => action=mark_max
+- "최소값/최솟값" => action=mark_min
+- "근/영점/zero/roots" => action=mark_roots
+- "교점/교차점/intersection" => action=mark_intersections
+- "지워/삭제/클리어" => action=clear_markers
+- If unclear => action=none and message asks for clarification
+
+Defaults:
+- target="typed"
+- args.samples=2500 for max/min
+- args.maxCount=8 for roots/intersections
+- args.tol=1e-6
+        `.trim(),
       },
-      {
-        role: "user",
-        content: prefix + "아래 질문에 대해 설명해 줘.\n\n" + inputText,
-      },
+      { role: "user", content: prefix + "UserRequest:\n" + inputText },
     ];
-
-    callLLM(messages);
+    callLLM(messages, { tab: "control", input: inputText });
   };
 
-  // ====== ai-panel-expression 영역: 편집 가능한 폼 ======
-
-  const handleFieldChange = (field, value) => {
-    setLocalEdit((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
+  const onTabClick = (id) => {
+    setActiveTab(id);
+    // 결과/입력은 굳이 지우지 않음: "누적" UX 유지
   };
 
-  
-  // 그래프 조작 탭 — JSON 커맨드로 그래프에 변화를 적용
-  const handleControl = async () => {
-    const ctx = (localEdit && localEdit.type ? localEdit : debouncedContext) || { type: null };
-
-    const messages = [
-      {
-        role: "developer",
-        content:
-          "너는 GraphMind의 그래프 조작 커맨드 생성기다. 반드시 JSON만 출력한다. " +
-          "스키마(반드시 준수): " +
-          "{\"type\":\"graph_command\",\"message\":\"...\",\"commands\":[{\"action\":\"mark_max|mark_min|mark_roots|mark_intersections|clear_markers\",\"target\":\"typed|fit\",\"args\":{\"samples\":2500}}]} " +
-          "설명/문장/코드블록 없이 JSON만 출력한다."
-      },
-      {
-        role: "user",
-        content:
-          "컨텍스트: " + JSON.stringify(ctx) + "\n" +
-          "사용자 입력: " + String(inputText || "") + "\n" +
-          "위 스키마의 JSON만 출력해."
-      },
-    ];
-
-    const content = await callLLM(messages);
-    const parsed = extractJsonFromText(content);
-
-    if (parsed && typeof parsed === "object") {
-      // message만 화면에 보여주기
-      if (parsed.message) setResultText(String(parsed.message));
-
-      // Studio로 커맨드 전달
-      if (typeof onCommand === "function") {
-        onCommand({
-          ...parsed,
-          tabId: ctx?.tabId ?? parsed.tabId ?? null,
-          pane: ctx?.pane ?? parsed.pane ?? null,
-        });
-      }
-    }
+  const copyText = async (t) => {
+    try {
+      await navigator.clipboard.writeText(t ?? "");
+    } catch {}
   };
-
-const renderExplainTab = () => {
-    const baseCtx = localEdit && localEdit.type ? localEdit : debouncedContext;
-    const ctx = baseCtx || { type: null };
-    const empty = !ctx || !ctx.type;
-
-    const renderBody = () => {
-      if (empty) return <div>현재 활성 탭의 리소스가 없습니다.</div>;
-
-      if (ctx.type === "equation") {
-        return (
-          <div className="ai-panel-form">
-            <label className="ai-panel-field">
-              <span className="ai-panel-field-label">탭 제목</span>
-              <input
-                className="ai-panel-input"
-                value={ctx.title ?? ""}
-                onChange={(e) =>
-                  handleFieldChange("title", e.target.value)
-                }
-              />
-            </label>
-
-            <label className="ai-panel-field">
-              <span className="ai-panel-field-label">수식</span>
-              <input
-                className="ai-panel-input"
-                value={ctx.equation ?? ""}
-                onChange={(e) =>
-                  handleFieldChange("equation", e.target.value)
-                }
-              />
-            </label>
-
-            <div className="ai-panel-field-row">
-              <label className="ai-panel-field half">
-                <span className="ai-panel-field-label">xmin</span>
-                <input
-                  className="ai-panel-input"
-                  value={ctx.xmin ?? ""}
-                  onChange={(e) =>
-                    handleFieldChange("xmin", e.target.value)
-                  }
-                />
-              </label>
-              <label className="ai-panel-field half">
-                <span className="ai-panel-field-label">xmax</span>
-                <input
-                  className="ai-panel-input"
-                  value={ctx.xmax ?? ""}
-                  onChange={(e) =>
-                    handleFieldChange("xmax", e.target.value)
-                  }
-                />
-              </label>
-            </div>
-
-            <label className="ai-panel-field">
-              <span className="ai-panel-field-label">차수(degree)</span>
-              <input
-                className="ai-panel-input"
-                value={ctx.degree ?? ""}
-                onChange={(e) =>
-                  handleFieldChange("degree", e.target.value)
-                }
-              />
-            </label>
-
-            <div className="ai-panel-meta">
-              샘플 포인트: {ctx.points?.length ?? 0}개 (읽기 전용)
-            </div>
-          </div>
-        );
-      }
-
-      if (ctx.type === "curve3d") {
-        return (
-          <div className="ai-panel-form">
-            <label className="ai-panel-field">
-              <span className="ai-panel-field-label">탭 제목</span>
-              <input
-                className="ai-panel-input"
-                value={ctx.title ?? ""}
-                onChange={(e) =>
-                  handleFieldChange("title", e.target.value)
-                }
-              />
-            </label>
-
-            <label className="ai-panel-field">
-              <span className="ai-panel-field-label">x(t)</span>
-              <input
-                className="ai-panel-input"
-                value={ctx.xExpr ?? ""}
-                onChange={(e) =>
-                  handleFieldChange("xExpr", e.target.value)
-                }
-              />
-            </label>
-
-            <label className="ai-panel-field">
-              <span className="ai-panel-field-label">y(t)</span>
-              <input
-                className="ai-panel-input"
-                value={ctx.yExpr ?? ""}
-                onChange={(e) =>
-                  handleFieldChange("yExpr", e.target.value)
-                }
-              />
-            </label>
-
-            <label className="ai-panel-field">
-              <span className="ai-panel-field-label">z(t)</span>
-              <input
-                className="ai-panel-input"
-                value={ctx.zExpr ?? ""}
-                onChange={(e) =>
-                  handleFieldChange("zExpr", e.target.value)
-                }
-              />
-            </label>
-
-            <div className="ai-panel-field-row">
-              <label className="ai-panel-field half">
-                <span className="ai-panel-field-label">t min</span>
-                <input
-                  className="ai-panel-input"
-                  value={ctx.tMin ?? ""}
-                  onChange={(e) =>
-                    handleFieldChange("tMin", e.target.value)
-                  }
-                />
-              </label>
-              <label className="ai-panel-field half">
-                <span className="ai-panel-field-label">t max</span>
-                <input
-                  className="ai-panel-input"
-                  value={ctx.tMax ?? ""}
-                  onChange={(e) =>
-                    handleFieldChange("tMax", e.target.value)
-                  }
-                />
-              </label>
-            </div>
-
-            <label className="ai-panel-field">
-              <span className="ai-panel-field-label">samples</span>
-              <input
-                className="ai-panel-input"
-                value={ctx.samples ?? ""}
-                onChange={(e) =>
-                  handleFieldChange("samples", e.target.value)
-                }
-              />
-            </label>
-          </div>
-        );
-      }
-
-      if (ctx.type === "array3d") {
-        const Z = ctx.content?.length ?? 0;
-        const Y = ctx.content?.[0]?.length ?? 0;
-        const X = ctx.content?.[0]?.[0]?.length ?? 0;
-
-        return (
-          <div className="ai-panel-form">
-            <label className="ai-panel-field">
-              <span className="ai-panel-field-label">탭 제목</span>
-              <input
-                className="ai-panel-input"
-                value={ctx.title ?? ""}
-                onChange={(e) =>
-                  handleFieldChange("title", e.target.value)
-                }
-              />
-            </label>
-
-            <div className="ai-panel-meta">
-              3D Array size (읽기 전용): {X}×{Y}×{Z}
-            </div>
-          </div>
-        );
-      }
-
-      return <div>Unknown resource type.</div>;
-    };
-
-    return (
-      <div className="ai-panel-section">
-        <div className="ai-panel-label">현재 탭 정보 (편집 가능)</div>
-        <div className="ai-panel-expression">{renderBody()}</div>
-
-        <button
-          className="ai-panel-primary-btn"
-          onClick={handleExplainGraph}
-          disabled={isLoading}
-        >
-          {isLoading ? "분석 중..." : "그래프 설명 생성"}
-        </button>
-
-        <div className="ai-panel-result">
-          {resultText ? (
-            <pre className="ai-panel-result-text">{resultText}</pre>
-          ) : (
-            <div className="ai-panel-placeholder">
-              위 정보를 필요에 맞게 수정한 뒤, 버튼을 눌러 설명을 생성해 보세요.
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  const renderEquationTab = () => (
-    <div className="ai-panel-section">
-      <div className="ai-panel-label">수식 입력</div>
-      <textarea
-        className="ai-panel-textarea"
-        placeholder="문법이 애매한 수식, 너무 복잡한 수식을 붙여넣어 보세요."
-        value={inputText}
-        onChange={(e) => setInputText(e.target.value)}
-      />
-      <button
-        className="ai-panel-primary-btn"
-        onClick={handleEquationHelp}
-        disabled={isLoading}
-      >
-        {isLoading ? "분석 중..." : "수식 리팩토링 제안 받기"}
-      </button>
-
-      <div className="ai-panel-result">
-        {resultText ? (
-          <pre className="ai-panel-result-text">{resultText}</pre>
-        ) : (
-          <div className="ai-panel-placeholder">
-            수식을 입력하고 버튼을 눌러 AI 제안을 확인해 보세요.
-          </div>
-        )}
-      </div>
-    </div>
-  );
-
-  const renderChatTab = () => (
-    <div className="ai-panel-section">
-      <div className="ai-panel-label">질문</div>
-      <textarea
-        className="ai-panel-textarea"
-        placeholder="이 그래프, 개념, 문제에 대해 궁금한 점을 자유롭게 물어보세요."
-        value={inputText}
-        onChange={(e) => setInputText(e.target.value)}
-      />
-      <button
-        className="ai-panel-primary-btn"
-        onClick={handleChat}
-        disabled={isLoading}
-      >
-        {isLoading ? "답변 생성 중..." : "질문 보내기"}
-      </button>
-
-      <div className="ai-panel-result">
-        {resultText ? (
-          <pre className="ai-panel-result-text">{resultText}</pre>
-        ) : (
-          <div className="ai-panel-placeholder">
-            질문을 입력하면 이 영역에 AI의 답변이 표시됩니다.
-          </div>
-        )}
-      </div>
-    </div>
-  );
 
   if (!isOpen) return null;
-  const renderControlTab = () => (
-    <div className="ai-panel-section">
-      <div className="ai-panel-section-title">그래프 조작</div>
-
-      <textarea
-        className="ai-panel-textarea"
-        rows={5}
-        value={inputText}
-        onChange={(e) => setInputText(e.target.value)}
-        placeholder={'예) 최대값 표시해줘\n예) 근(roots)을 표시해줘\n예) 파란선과 빨간선의 교점을 표시해줘'}
-      />
-
-      <button
-        className="ai-panel-primary-btn"
-        onClick={handleControl}
-        disabled={isLoading}
-      >
-        {isLoading ? "처리 중..." : "커맨드 실행"}
-      </button>
-
-      <div className="ai-panel-result">
-        {resultText ? <pre className="ai-panel-pre">{resultText}</pre> : <div className="ai-panel-muted">결과가 여기에 표시됩니다.</div>}
-      </div>
-    </div>
-  );
-
-
 
   return (
     <>
-      <div className="ai-panel-backdrop" />
+      <div className="ai-panel-backdrop" onClick={onClose} />
       <aside className="ai-panel">
         <header className="ai-panel-header">
-          <div className="ai-panel-title">GraphMind AI</div>
-          <button className="ai-panel-close-btn" onClick={onClose}>
+          <div className="ai-panel-title">AI Panel</div>
+          <button className="ai-panel-close" onClick={onClose}>
             ✕
           </button>
         </header>
@@ -596,15 +364,8 @@ const renderExplainTab = () => {
           {TABS.map((tab) => (
             <button
               key={tab.id}
-              className={
-                "ai-panel-tab" +
-                (activeTab === tab.id ? " ai-panel-tab-active" : "")
-              }
-              onClick={() => {
-                setActiveTab(tab.id);
-                setResultText("");
-                setInputText("");
-              }}
+              className={"ai-panel-tab" + (activeTab === tab.id ? " ai-panel-tab-active" : "")}
+              onClick={() => onTabClick(tab.id)}
             >
               {tab.label}
             </button>
@@ -612,21 +373,166 @@ const renderExplainTab = () => {
         </div>
 
         <div className="ai-panel-body">
-          {activeTab === "explain" && renderExplainTab()}
-          {activeTab === "equation" && renderEquationTab()}
-          {activeTab === "chat" && renderChatTab()}
-          {activeTab === "control" && renderControlTab()}
+          {activeTab === "explain" && (
+            <div className="ai-panel-section">
+              <div className="ai-panel-label">현재 탭 정보</div>
+              <pre className="ai-panel-result-text" style={{ maxHeight: 160, overflow: "auto" }}>
+                {safeJsonStringify(ctx)}
+              </pre>
+
+              <button className="ai-panel-primary-btn" onClick={handleExplainGraph} disabled={isLoading}>
+                {isLoading ? "생성 중..." : "그래프 설명 생성"}
+              </button>
+
+              <div className="ai-panel-result">
+                {resultText ? <pre className="ai-panel-result-text">{resultText}</pre> : <div className="ai-panel-placeholder">출력이 여기 표시됩니다.</div>}
+              </div>
+            </div>
+          )}
+
+          {activeTab === "equation" && (
+            <div className="ai-panel-section">
+              <div className="ai-panel-label">수식 입력</div>
+              <textarea className="ai-panel-textarea" value={inputText} onChange={(e) => setInputText(e.target.value)} />
+              <button className="ai-panel-primary-btn" onClick={handleEquation} disabled={isLoading}>
+                {isLoading ? "정리 중..." : "수식 정리/설명"}
+              </button>
+              <div className="ai-panel-result">
+                {resultText ? <pre className="ai-panel-result-text">{resultText}</pre> : <div className="ai-panel-placeholder">출력이 여기 표시됩니다.</div>}
+              </div>
+            </div>
+          )}
+
+          {activeTab === "chat" && (
+            <div className="ai-panel-section">
+              <div className="ai-panel-label">질문</div>
+              <textarea className="ai-panel-textarea" value={inputText} onChange={(e) => setInputText(e.target.value)} />
+              <button className="ai-panel-primary-btn" onClick={handleChat} disabled={isLoading}>
+                {isLoading ? "답변 생성 중..." : "질문 보내기"}
+              </button>
+              <div className="ai-panel-result">
+                {resultText ? <pre className="ai-panel-result-text">{resultText}</pre> : <div className="ai-panel-placeholder">출력이 여기 표시됩니다.</div>}
+              </div>
+            </div>
+          )}
+
+          {activeTab === "control" && (
+            <div className="ai-panel-section">
+              <div className="ai-panel-label">그래프 조작</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                <button className="ai-panel-primary-btn" style={{ padding: "8px 10px" }} disabled={isLoading} onClick={() => { setInputText("최대값 표시해줘"); }}>
+                  Max
+                </button>
+                <button className="ai-panel-primary-btn" style={{ padding: "8px 10px" }} disabled={isLoading} onClick={() => { setInputText("최소값 표시해줘"); }}>
+                  Min
+                </button>
+                <button className="ai-panel-primary-btn" style={{ padding: "8px 10px" }} disabled={isLoading} onClick={() => { setInputText("근 표시해줘"); }}>
+                  Roots
+                </button>
+                <button className="ai-panel-primary-btn" style={{ padding: "8px 10px" }} disabled={isLoading} onClick={() => { setInputText("교점 표시해줘"); }}>
+                  Intersections
+                </button>
+                <button className="ai-panel-primary-btn" style={{ padding: "8px 10px" }} disabled={isLoading} onClick={() => { setInputText("마커 지워줘"); }}>
+                  Clear
+                </button>
+              </div>
+
+              <textarea
+                className="ai-panel-textarea"
+                placeholder="예) 최대값 표시해줘 / 근 표시해줘 / 교점 표시해줘 / 마커 지워줘"
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+              />
+
+              <button className="ai-panel-primary-btn" onClick={handleControl} disabled={isLoading}>
+                {isLoading ? "실행 중..." : "명령 실행"}
+              </button>
+
+              <div className="ai-panel-result">
+                {resultText ? <pre className="ai-panel-result-text">{resultText}</pre> : <div className="ai-panel-placeholder">LLM이 반환한 결과/상태가 표시됩니다.</div>}
+              </div>
+            </div>
+          )}
+
+          {activeTab === "history" && (
+            <div className="ai-panel-section">
+              <div className="ai-panel-label" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <span>History</span>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <select
+                    value={historyScope}
+                    onChange={(e) => setHistoryScope(e.target.value)}
+                    style={{
+                      padding: "6px 8px",
+                      borderRadius: 8,
+                      border: "1px solid #2b2f3a",
+                      background: "#0b0f17",
+                      color: "#e7ecf3",
+                      fontSize: 12,
+                    }}
+                  >
+                    <option value="tab">현재 탭</option>
+                    <option value="all">전체</option>
+                  </select>
+                  <button className="ai-panel-primary-btn" style={{ padding: "8px 10px" }} onClick={clearHistory}>
+                    삭제
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {history.length === 0 ? (
+                  <div className="ai-panel-placeholder">아직 기록이 없습니다.</div>
+                ) : (
+                  history.map((e) => (
+                    <div
+                      key={e.id}
+                      style={{
+                        border: "1px solid #1c2333",
+                        borderRadius: 12,
+                        padding: 10,
+                        background: "#0b0f17",
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+                        <div style={{ color: "#cbd5e1", fontSize: 12 }}>
+                          <b style={{ color: "#e7ecf3" }}>{e.tab ?? "-"}</b>{" "}
+                          <span style={{ opacity: 0.8 }}>{e.ctxTitle ? `· ${e.ctxTitle}` : ""}</span>
+                        </div>
+                        <div style={{ color: "#94a3b8", fontSize: 11 }}>{e.ts}</div>
+                      </div>
+
+                      <div style={{ color: "#e7ecf3", fontSize: 12, whiteSpace: "pre-wrap" }}>
+                        <div style={{ opacity: 0.9, marginBottom: 6 }}>
+                          <b>Input</b>: {e.input}
+                        </div>
+                        <div style={{ opacity: 0.9 }}>
+                          <b>Output</b>: {e.output}
+                        </div>
+                      </div>
+
+                      <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                        <button className="ai-panel-primary-btn" style={{ padding: "8px 10px" }} onClick={() => restoreFromEntry(e)}>
+                          다시보기
+                        </button>
+                        <button className="ai-panel-primary-btn" style={{ padding: "8px 10px" }} onClick={() => copyText(e.output)}>
+                          복사
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         <footer className="ai-panel-footer">
           <div className="ai-panel-helper-text">
-            이 패널은 로컬 프록시 서버(https://factchat-cloud → ai-proxy-server)를
-            통해 LLM API를 호출하는 테스트용 UI입니다.
+            History는 localStorage에 저장됩니다. (현재 탭 / 전체)
           </div>
         </footer>
       </aside>
     </>
   );
-};
-
-export default AIPanel;
+}
