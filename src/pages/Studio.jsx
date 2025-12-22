@@ -77,6 +77,290 @@ const coeffsToFn = (coeffs) => (x) => {
   return y;
 };
 
+
+// ── rule-based editing (keep formula family, update only parameters) ────────────
+const isFiniteNum = (v) => Number.isFinite(v);
+
+const roundNum = (n, digits = 6) => {
+  const m = 10 ** digits;
+  return Math.round(n * m) / m;
+};
+
+const fmtNum = (n, digits = 6) => {
+  if (!isFiniteNum(n)) return "0";
+  const r = roundNum(n, digits);
+  // avoid "-0"
+  const v = Object.is(r, -0) ? 0 : r;
+  return String(v);
+};
+
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+function polyEquationFromCoeffs(coeffs) {
+  // coeffs: [c0, c1, c2, ...] where y = Σ ci * x^i
+  const eps = 1e-10;
+  const terms = [];
+  for (let i = coeffs.length - 1; i >= 0; i--) {
+    const c = coeffs[i];
+    if (!isFiniteNum(c) || Math.abs(c) < eps) continue;
+
+    const sign = c < 0 ? "-" : "+";
+    const absC = Math.abs(c);
+
+    let term = "";
+    if (i === 0) {
+      term = fmtNum(absC);
+    } else if (i === 1) {
+      if (Math.abs(absC - 1) < 1e-10) term = "x";
+      else term = `${fmtNum(absC)}*x`;
+    } else {
+      if (Math.abs(absC - 1) < 1e-10) term = `x^${i}`;
+      else term = `${fmtNum(absC)}*x^${i}`;
+    }
+
+    if (terms.length === 0) {
+      terms.push((c < 0 ? "-" : "") + term);
+    } else {
+      terms.push(` ${sign} ${term}`);
+    }
+  }
+  return terms.length ? terms.join("") : "0";
+}
+
+function leastSquaresLinear(xs, ys) {
+  // Fit y = a*x + b
+  const n = xs.length;
+  if (n < 2) return { a: 0, b: ys[0] ?? 0 };
+  let sx = 0, sy = 0, sxx = 0, sxy = 0;
+  for (let i = 0; i < n; i++) {
+    const x = xs[i], y = ys[i];
+    sx += x; sy += y; sxx += x * x; sxy += x * y;
+  }
+  const denom = n * sxx - sx * sx;
+  if (Math.abs(denom) < 1e-12) {
+    // vertical-ish: fall back to mean y
+    return { a: 0, b: sy / n };
+  }
+  const a = (n * sxy - sx * sy) / denom;
+  const b = (sy - a * sx) / n;
+  return { a, b };
+}
+
+// Lightweight Nelder–Mead (good enough for 3~4 params, small point counts)
+function nelderMead(f, x0, {
+  step = 1,
+  maxIter = 80,
+  tol = 1e-7,
+  alpha = 1,
+  gamma = 2,
+  rho = 0.5,
+  sigma = 0.5,
+} = {}) {
+  const dim = x0.length;
+  const simplex = new Array(dim + 1);
+  simplex[0] = { x: x0.slice(), fx: f(x0) };
+
+  for (let i = 0; i < dim; i++) {
+    const x = x0.slice();
+    x[i] += step;
+    simplex[i + 1] = { x, fx: f(x) };
+  }
+
+  const centroid = (pts) => {
+    const c = new Array(dim).fill(0);
+    for (const p of pts) for (let i = 0; i < dim; i++) c[i] += p.x[i];
+    for (let i = 0; i < dim; i++) c[i] /= pts.length;
+    return c;
+  };
+
+  const distSimplex = () => {
+    const best = simplex[0].x;
+    let m = 0;
+    for (let i = 1; i < simplex.length; i++) {
+      let d = 0;
+      for (let j = 0; j < dim; j++) d += (simplex[i].x[j] - best[j]) ** 2;
+      m = Math.max(m, Math.sqrt(d));
+    }
+    return m;
+  };
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    simplex.sort((a, b) => a.fx - b.fx);
+    if (distSimplex() < tol) break;
+
+    const best = simplex[0];
+    const worst = simplex[dim];
+    const secondWorst = simplex[dim - 1];
+    const c = centroid(simplex.slice(0, dim)); // exclude worst
+
+    // reflection
+    const xr = c.map((ci, i) => ci + alpha * (ci - worst.x[i]));
+    const fr = f(xr);
+
+    if (fr < best.fx) {
+      // expansion
+      const xe = c.map((ci, i) => ci + gamma * (xr[i] - ci));
+      const fe = f(xe);
+      simplex[dim] = fe < fr ? { x: xe, fx: fe } : { x: xr, fx: fr };
+      continue;
+    }
+
+    if (fr < secondWorst.fx) {
+      simplex[dim] = { x: xr, fx: fr };
+      continue;
+    }
+
+    // contraction
+    const xc = c.map((ci, i) => ci + rho * (worst.x[i] - ci));
+    const fc = f(xc);
+
+    if (fc < worst.fx) {
+      simplex[dim] = { x: xc, fx: fc };
+      continue;
+    }
+
+    // shrink
+    for (let i = 1; i < simplex.length; i++) {
+      const xs = simplex[i].x.map((v, j) => best.x[j] + sigma * (v - best.x[j]));
+      simplex[i] = { x: xs, fx: f(xs) };
+    }
+  }
+
+  simplex.sort((a, b) => a.fx - b.fx);
+  return simplex[0].x;
+}
+
+function snapPointsToFn(points, fn, xmin, xmax) {
+  return points.map((p) => {
+    const x = clamp(p.x, xmin, xmax);
+    const y = fn ? fn(x) : p.y;
+    return { ...p, x, y: isFiniteNum(y) ? y : 0 };
+  });
+}
+
+function fitRuleFromPoints(ruleMode, points, { polyDegree = 3 } = {}) {
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+
+  if (ruleMode === "free") {
+    return { ok: true, equation: null, fn: null, message: null };
+  }
+
+  if (ruleMode === "linear") {
+    if (points.length < 2) return { ok: false, message: "선형 규칙은 최소 2개 점이 필요합니다." };
+    const { a, b } = leastSquaresLinear(xs, ys);
+    const equation = `${fmtNum(a)}*x + ${fmtNum(b)}`;
+    const fn = (x) => a * x + b;
+    return { ok: true, equation, fn, message: null };
+  }
+
+  if (ruleMode === "poly") {
+    const d = Math.max(0, Math.floor(polyDegree));
+    const useD = Math.min(d, Math.max(0, points.length - 1));
+    const coeffs = fitPolyCoeffs(xs, ys, useD);
+    const equation = polyEquationFromCoeffs(coeffs);
+    const fn = coeffsToFn(coeffs);
+    return { ok: true, equation, fn, message: null };
+  }
+
+  // Nonlinear rules: Nelder–Mead (small, fast; meant for interactive edits)
+  const sse = (pred) => {
+    let e = 0;
+    for (let i = 0; i < xs.length; i++) {
+      const yhat = pred(xs[i]);
+      const r = (isFiniteNum(yhat) ? yhat : 0) - ys[i];
+      e += r * r;
+    }
+    return e;
+  };
+
+  if (ruleMode === "sin") {
+    if (points.length < 3) return { ok: false, message: "사인 규칙은 최소 3개 점이 필요합니다." };
+    const yMin = Math.min(...ys), yMax = Math.max(...ys);
+    const A0 = (yMax - yMin) / 2 || 1;
+    const C0 = (yMax + yMin) / 2 || 0;
+    const w0 = 1; // 기본 주파수
+    const p0 = 0; // phase
+    const x0 = [A0, w0, p0, C0];
+
+    const f = (v) => {
+      const A = v[0], w = Math.max(1e-6, Math.abs(v[1])), phi = v[2], C = v[3];
+      return sse((x) => A * Math.sin(w * x + phi) + C);
+    };
+    const [A, wRaw, phiRaw, C] = nelderMead(f, x0, { step: 0.35, maxIter: 90 });
+    const w = Math.max(1e-6, Math.abs(wRaw));
+    const phi = phiRaw;
+    const equation = `${fmtNum(A)}*sin(${fmtNum(w)}*x + ${fmtNum(phi)}) + ${fmtNum(C)}`;
+    const fn = (x) => A * Math.sin(w * x + phi) + C;
+    return { ok: true, equation, fn, message: null };
+  }
+
+  if (ruleMode === "exp") {
+    if (points.length < 3) return { ok: false, message: "지수 규칙은 최소 3개 점이 필요합니다." };
+    const yMin = Math.min(...ys), yMax = Math.max(...ys);
+    const C0 = yMin; // baseline
+    const A0 = (yMax - yMin) || 1;
+    const k0 = 0.3;
+    const x0 = [A0, k0, C0];
+
+    const f = (v) => {
+      const A = v[0], k = v[1], C = v[2];
+      // avoid overflow
+      return sse((x) => {
+        const z = clamp(k * x, -30, 30);
+        return A * Math.exp(z) + C;
+      });
+    };
+    const [A, k, C] = nelderMead(f, x0, { step: 0.25, maxIter: 90 });
+    const equation = `${fmtNum(A)}*exp(${fmtNum(k)}*x) + ${fmtNum(C)}`;
+    const fn = (x) => A * Math.exp(clamp(k * x, -30, 30)) + C;
+    return { ok: true, equation, fn, message: null };
+  }
+
+  if (ruleMode === "log") {
+    if (points.some((p) => p.x <= 0)) {
+      return { ok: false, message: "로그 규칙은 x>0 범위에서만 동작합니다. (점의 x를 양수로 이동하세요.)" };
+    }
+    const yMin = Math.min(...ys), yMax = Math.max(...ys);
+    const A0 = (yMax - yMin) || 1;
+    const C0 = (yMax + yMin) / 2 || 0;
+    const k0 = 1;
+    const x0 = [A0, k0, C0];
+
+    const f = (v) => {
+      const A = v[0], k = Math.max(1e-6, Math.abs(v[1])), C = v[2];
+      return sse((x) => A * Math.log(k * x) + C);
+    };
+    const [A, kRaw, C] = nelderMead(f, x0, { step: 0.25, maxIter: 90 });
+    const k = Math.max(1e-6, Math.abs(kRaw));
+    const equation = `${fmtNum(A)}*log(${fmtNum(k)}*x) + ${fmtNum(C)}`;
+    const fn = (x) => A * Math.log(k * x) + C;
+    return { ok: true, equation, fn, message: null };
+  }
+
+  if (ruleMode === "power") {
+    if (points.some((p) => p.x <= 0)) {
+      return { ok: false, message: "거듭제곱 규칙은 x>0 범위에서만 안정적으로 동작합니다. (점의 x를 양수로 이동하세요.)" };
+    }
+    const yMin = Math.min(...ys), yMax = Math.max(...ys);
+    const C0 = yMin;
+    const A0 = (yMax - yMin) || 1;
+    const p0 = 1;
+    const x0 = [A0, p0, C0];
+
+    const f = (v) => {
+      const A = v[0], p = v[1], C = v[2];
+      return sse((x) => A * (x ** p) + C);
+    };
+    const [A, p, C] = nelderMead(f, x0, { step: 0.25, maxIter: 100 });
+    const equation = `${fmtNum(A)}*x^(${fmtNum(p)}) + ${fmtNum(C)}`;
+    const fn = (x) => A * (x ** p) + C;
+    return { ok: true, equation, fn, message: null };
+  }
+
+  return { ok: false, message: "알 수 없는 규칙입니다." };
+}
+
 // ────────────────────────────────────────────────────────────
 // Array3D용 간단 Toolbar
 function ArrayToolbar({ data, isSplit, setIsSplit }) {
@@ -222,6 +506,9 @@ export default function Studio() {
       xmin: -3,
       xmax: 3,
       degree: 3,
+      ruleMode: "free",
+      rulePolyDegree: 3,
+      ruleError: null,
       points:
         initialType === "equation" ? makeInitialPoints(initialFormula) : [],
       ver: 0,
@@ -265,45 +552,6 @@ export default function Studio() {
   const [equationExpr, setEquationExpr] = useState(initialFormula);
 
   // ── 탭에서 poly-fit 파생 데이터 ────────────────────────
-  const deriveFor = useCallback(
-    (tabId) => {
-      if (!tabId) return null;
-      const s = tabState[tabId];
-      if (!s || s.type !== "equation") return null;
-      const xs = s.points.map((p) => p.x);
-      const ys = s.points.map((p) => p.y);
-      const d = Math.min(s.degree, Math.max(0, s.points.length - 1));
-      const coeffs = fitPolyCoeffs(xs, ys, d);
-      return {
-        typedFn: exprToFn(s.equation),
-        fittedFn: coeffsToFn(coeffs),
-        xmin: s.xmin,
-        xmax: s.xmax,
-        points: s.points,
-        curveKey: coeffs.map((c) => c.toFixed(6)).join("|") + `|v${s.ver ?? 0}`,
-        updatePoint: (idx, xy) =>
-          setTabState((st) => {
-            const cur = st[tabId];
-            const nextPts = cur.points.map((p, i) =>
-              i === idx ? { ...p, ...xy } : p
-            );
-            return {
-              ...st,
-              [tabId]: { ...cur, points: nextPts },
-            };
-          }),
-      };
-    },
-    [tabState]
-  );
-
-  const leftActiveId = panes.left.activeId;
-  const rightActiveId = panes.right.activeId;
-  const leftPack = deriveFor(leftActiveId);
-  const rightPack = deriveFor(rightActiveId);
-  const leftActive = leftActiveId ? tabState[leftActiveId] : null;
-  const rightActive = rightActiveId ? tabState[rightActiveId] : null;
-
   // ✅ Vault localStorage + state 안 수식 업데이트
   const updateVaultFormula = useCallback((vaultId, newEquation) => {
     if (!vaultId) return;
@@ -325,6 +573,117 @@ export default function Studio() {
       return next;
     });
   }, []);
+
+  const deriveFor = useCallback(
+    (tabId) => {
+      if (!tabId) return null;
+      const s = tabState[tabId];
+      if (!s || s.type !== "equation") return null;
+
+      // Blue curve: polynomial fit of control points (unchanged behavior)
+      const xs = s.points.map((p) => p.x);
+      const ys = s.points.map((p) => p.y);
+      const d = Math.min(s.degree, Math.max(0, s.points.length - 1));
+      const coeffs = fitPolyCoeffs(xs, ys, d);
+
+      const setRuleMode = (mode) =>
+        setTabState((st) => ({
+          ...st,
+          [tabId]: { ...st[tabId], ruleMode: mode, ruleError: null },
+        }));
+
+      const setRulePolyDegree = (deg) =>
+        setTabState((st) => ({
+          ...st,
+          [tabId]: { ...st[tabId], rulePolyDegree: deg, ruleError: null },
+        }));
+
+      // Apply rule on drag-end: update equation + snap points to the new curve (family preserved)
+      const commitRule = (pointsOverride) => {
+        const cur = tabState[tabId];
+        if (!cur || cur.type !== "equation") return;
+
+        const pts = Array.isArray(pointsOverride) ? pointsOverride : cur.points;
+        const ruleMode = cur.ruleMode ?? "free";
+        const polyDegree = cur.rulePolyDegree ?? cur.degree;
+
+        const res = fitRuleFromPoints(ruleMode, pts, { polyDegree });
+        if (!res.ok) {
+          setTabState((st) => ({
+            ...st,
+            [tabId]: { ...st[tabId], ruleError: res.message ?? "규칙 적용 실패" },
+          }));
+          return;
+        }
+
+        if (ruleMode === "free") {
+          setTabState((st) => ({
+            ...st,
+            [tabId]: { ...st[tabId], ruleError: null, ver: (st[tabId].ver ?? 0) + 1 },
+          }));
+          return;
+        }
+
+        const nextEq = res.equation ?? cur.equation;
+        const snapped = snapPointsToFn(pts, res.fn, cur.xmin, cur.xmax);
+
+        setTabState((st) => ({
+          ...st,
+          [tabId]: {
+            ...st[tabId],
+            equation: nextEq,
+            points: snapped,
+            ruleError: null,
+            ver: (st[tabId].ver ?? 0) + 1,
+          },
+        }));
+
+        // keep tab title and Vault note in sync
+        setTabs((t) => ({
+          ...t,
+          byId: {
+            ...t.byId,
+            [tabId]: { ...t.byId[tabId], title: titleFromFormula(nextEq) },
+          },
+        }));
+        updateVaultFormula(cur.vaultId, nextEq);
+      };
+
+      return {
+        typedFn: exprToFn(s.equation),
+        fittedFn: coeffsToFn(coeffs),
+        xmin: s.xmin,
+        xmax: s.xmax,
+        points: s.points,
+        curveKey: coeffs.map((c) => c.toFixed(6)).join("|") + `|v${s.ver ?? 0}`,
+        updatePoint: (idx, xy) =>
+          setTabState((st) => {
+            const cur = st[tabId];
+            const nextPts = cur.points.map((p, i) => (i === idx ? { ...p, ...xy } : p));
+            return {
+              ...st,
+              [tabId]: { ...cur, points: nextPts },
+            };
+          }),
+        commitRule,
+
+        ruleMode: s.ruleMode ?? "free",
+        setRuleMode,
+        rulePolyDegree: s.rulePolyDegree ?? s.degree,
+        setRulePolyDegree,
+        ruleError: s.ruleError ?? null,
+      };
+    },
+    [tabState, updateVaultFormula]
+  );
+
+  const leftActiveId = panes.left.activeId;
+  const rightActiveId = panes.right.activeId;
+  const leftPack = deriveFor(leftActiveId);
+  const rightPack = deriveFor(rightActiveId);
+  const leftActive = leftActiveId ? tabState[leftActiveId] : null;
+  const rightActive = rightActiveId ? tabState[rightActiveId] : null;
+
 
   // 탭 ops
   const setActive = (paneKey, id) => {
@@ -432,6 +791,9 @@ export default function Studio() {
           xmin: -3,
           xmax: 3,
           degree: 3,
+          ruleMode: "free",
+          rulePolyDegree: 3,
+          ruleError: null,
           points: type === "equation" ? makeInitialPoints(eq) : [],
           ver: 0,
           vaultId,
@@ -955,6 +1317,12 @@ export default function Studio() {
                     fittedFn={leftPack.fittedFn}
                     typedFn={leftPack.typedFn}
                     curveKey={leftPack.curveKey}
+                    commitRule={leftPack.commitRule}
+                    ruleMode={leftPack.ruleMode}
+                    setRuleMode={leftPack.setRuleMode}
+                    rulePolyDegree={leftPack.rulePolyDegree}
+                    setRulePolyDegree={leftPack.setRulePolyDegree}
+                    ruleError={leftPack.ruleError}
                   />
                 ) : (
                   <div className="empty-hint">왼쪽에 열린 탭이 없습니다.</div>
@@ -1012,6 +1380,12 @@ export default function Studio() {
                         fittedFn={rightPack.fittedFn}
                         typedFn={rightPack.typedFn}
                         curveKey={rightPack.curveKey}
+                        commitRule={rightPack.commitRule}
+                        ruleMode={rightPack.ruleMode}
+                        setRuleMode={rightPack.setRuleMode}
+                        rulePolyDegree={rightPack.rulePolyDegree}
+                        setRulePolyDegree={rightPack.setRulePolyDegree}
+                        ruleError={rightPack.ruleError}
                       />
                     ) : (
                       <div className="empty-hint">

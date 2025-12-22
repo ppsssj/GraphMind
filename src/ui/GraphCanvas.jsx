@@ -127,7 +127,7 @@ function Curve({ fn, xmin, xmax, color = "white" }) {
   );
 }
 
-function EditablePoint({ index, position, onChange, setControlsBusy }) {
+function EditablePoint({ index, position, onChange, onCommit, setControlsBusy }) {
   const tcRef = useRef();
 
   useEffect(() => {
@@ -145,7 +145,11 @@ function EditablePoint({ index, position, onChange, setControlsBusy }) {
       if (!obj) return;
       onChange(index, { x: obj.position.x, y: obj.position.y });
     };
-    const onDraggingChanged = (e) => setControlsBusy(!!e.value);
+    const onDraggingChanged = (e) => {
+      const dragging = !!e.value;
+      setControlsBusy(dragging);
+      if (!dragging) onCommit?.(index);
+    };
 
     tc.addEventListener("change", handleChange);
     tc.addEventListener("dragging-changed", onDraggingChanged);
@@ -154,7 +158,7 @@ function EditablePoint({ index, position, onChange, setControlsBusy }) {
       tc.removeEventListener("change", handleChange);
       tc.removeEventListener("dragging-changed", onDraggingChanged);
     };
-  }, [index, onChange, setControlsBusy]);
+  }, [index, onChange, onCommit, setControlsBusy]);
 
   return (
     <group>
@@ -174,7 +178,7 @@ function EditablePoint({ index, position, onChange, setControlsBusy }) {
   );
 }
 
-function DraggablePoint({ index, position, xmin, xmax, onChange, setControlsBusy }) {
+function DraggablePoint({ index, position, xmin, xmax, onChange, onCommit, setControlsBusy }) {
   const plane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), []);
   const hit = useRef(new THREE.Vector3());
   const [hovered, setHovered] = useState(false);
@@ -218,6 +222,8 @@ function DraggablePoint({ index, position, xmin, xmax, onChange, setControlsBusy
     try {
       if (el?.hasPointerCapture?.(pid)) el.releasePointerCapture(pid);
     } catch {}
+
+    onCommit?.(index);
   };
 
   return (
@@ -256,11 +262,18 @@ function DraggablePoint({ index, position, xmin, xmax, onChange, setControlsBusy
 export default function GraphCanvas({
   points,
   onPointChange,
+  onPointCommit,
   xmin,
   xmax,
   fn,
   typedFn,
   curveKey,
+  // rule editing (optional)
+  ruleMode = "free",
+  setRuleMode,
+  rulePolyDegree = 3,
+  setRulePolyDegree,
+  ruleError,
   showControls = true,
 }) {
   const wrapperRef = useRef(null);
@@ -273,6 +286,7 @@ export default function GraphCanvas({
   const showFit = fn && (viewMode === "fit" || viewMode === "both");
 
   const [editMode, setEditMode] = useState("drag"); // arrows | drag
+  const commit = () => onPointCommit?.(points);
   const handEnabled = useInputPrefs((s) => s.handControlEnabled);
 
   return (
@@ -327,6 +341,7 @@ export default function GraphCanvas({
               position={{ x: p.x, y: p.y }}
               onChange={(idx, xy) => onPointChange(idx, xy)}
               setControlsBusy={setControlsBusy}
+              onCommit={commit}
             />
           ) : (
             <DraggablePoint
@@ -337,6 +352,7 @@ export default function GraphCanvas({
               xmax={xmax}
               onChange={(idx, xy) => onPointChange(idx, xy)}
               setControlsBusy={setControlsBusy}
+              onCommit={commit}
             />
           )
         )}
@@ -360,6 +376,79 @@ export default function GraphCanvas({
             boxSizing: "border-box",
           }}
         >
+          {/* Rule-based editing */}
+          <div
+            style={{
+              background: "rgba(0,0,0,0.55)",
+              color: "#fff",
+              padding: "8px 10px",
+              borderRadius: 10,
+              fontSize: 11,
+              minWidth: 240,
+            }}
+          >
+            <div style={{ marginBottom: 6, opacity: 0.9, fontWeight: 600 }}>
+              규칙 기반 편집
+            </div>
+
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <select
+                value={ruleMode}
+                onChange={(e) => setRuleMode?.(e.target.value)}
+                style={{
+                  flex: 1,
+                  background: "rgba(10,10,10,0.85)",
+                  color: "#fff",
+                  border: "1px solid rgba(255,255,255,0.15)",
+                  borderRadius: 8,
+                  padding: "4px 6px",
+                  outline: "none",
+                  fontSize: 11,
+                }}
+              >
+                <option value="free">자유(수식 고정)</option>
+                <option value="linear">선형: a·x + b</option>
+                <option value="poly">다항식: 차수 고정</option>
+                <option value="sin">사인: A·sin(ωx+φ)+C</option>
+                <option value="exp">지수: A·exp(kx)+C</option>
+                <option value="log">로그: A·log(kx)+C</option>
+                <option value="power">거듭제곱: A·x^p + C</option>
+              </select>
+
+              {ruleMode === "poly" && (
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={rulePolyDegree}
+                  onChange={(e) => setRulePolyDegree?.(Number(e.target.value))}
+                  style={{
+                    width: 64,
+                    background: "rgba(10,10,10,0.85)",
+                    color: "#fff",
+                    border: "1px solid rgba(255,255,255,0.15)",
+                    borderRadius: 8,
+                    padding: "4px 6px",
+                    outline: "none",
+                    fontSize: 11,
+                  }}
+                  title="다항 차수"
+                />
+              )}
+            </div>
+
+            <div style={{ marginTop: 6, opacity: 0.75, lineHeight: 1.35 }}>
+              점을 드래그한 뒤 놓으면, 선택한 규칙(함수 family)을 유지한 채 파라미터만 갱신됩니다.
+            </div>
+
+            {ruleError && (
+              <div style={{ marginTop: 6, color: "#ffcc80", lineHeight: 1.35 }}>
+                {ruleError}
+              </div>
+            )}
+          </div>
+
+
           <div style={{ background: "rgba(0,0,0,0.55)", color: "#fff", padding: "6px 8px", borderRadius: 8, fontSize: 11 }}>
             <div style={{ marginBottom: 6, opacity: 0.9 }}>손 제스처</div>
             <div style={{ opacity: 0.85, lineHeight: 1.35 }}>
