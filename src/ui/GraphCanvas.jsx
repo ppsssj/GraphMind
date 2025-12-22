@@ -1,26 +1,17 @@
 // src/ui/GraphCanvas.jsx
 import { useMemo, useRef, useState, useEffect } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
-import {
-  OrbitControls,
-  TransformControls,
-  Text,
-  useCursor,
-} from "@react-three/drei";
+import { OrbitControls, TransformControls, Text, useCursor } from "@react-three/drei";
 import * as THREE from "three";
 
 import { HandInputProvider } from "../input/HandInputProvider";
 import { useInputPrefs } from "../store/useInputPrefs";
 
-function CameraControlBridge({
-  cameraApiRef,
-  target = new THREE.Vector3(0, 0, 0),
-}) {
+function CameraControlBridge({ cameraApiRef, target = new THREE.Vector3(0, 0, 0) }) {
   const { camera, viewport } = useThree();
   const targetRef = useRef(target.clone());
   const sphericalRef = useRef(new THREE.Spherical());
 
-  // init spherical from current camera position
   useEffect(() => {
     const pos = camera.position.clone().sub(targetRef.current);
     sphericalRef.current.setFromVector3(pos);
@@ -31,37 +22,29 @@ function CameraControlBridge({
 
     cameraApiRef.current = {
       zoomBy: (delta) => {
-        // Orthographic zoom: zoom *= (1 + delta)
         const next = camera.zoom * (1 + delta);
         camera.zoom = Math.max(20, Math.min(260, next));
         camera.updateProjectionMatrix();
       },
 
       panBy: (dxNorm, dyNorm) => {
-        // dxNorm/dyNorm: screen-normalized delta (0~1 scale)
-        // viewport.width/height already represent world size for current zoom.
         const dxWorld = -dxNorm * viewport.width;
         const dyWorld = dyNorm * viewport.height;
 
         camera.position.x += dxWorld;
         camera.position.y += dyWorld;
 
-        // also move target with camera (orbit-style panning)
         targetRef.current.x += dxWorld;
         targetRef.current.y += dyWorld;
       },
 
       rotateBy: (dYaw, dPitch) => {
-        // rotate around target using spherical coords
-        // dYaw/dPitch are small values
         const s = sphericalRef.current;
 
-        s.theta += dYaw; // yaw
-        s.phi = Math.max(0.15, Math.min(Math.PI - 0.15, s.phi + dPitch)); // pitch clamp
+        s.theta += dYaw;
+        s.phi = Math.max(0.15, Math.min(Math.PI - 0.15, s.phi + dPitch));
 
-        const v = new THREE.Vector3()
-          .setFromSpherical(s)
-          .add(targetRef.current);
+        const v = new THREE.Vector3().setFromSpherical(s).add(targetRef.current);
         camera.position.copy(v);
         camera.lookAt(targetRef.current);
       },
@@ -76,44 +59,34 @@ function CameraControlBridge({
 }
 
 function Axes({ xmin = -8, xmax = 8, ymin = -8, ymax = 8, gridStep = 1 }) {
-  const span = Math.max(xmax - xmin, ymax - ymin);
-  const sizeScale = 1.5; // 좌표판 넓이 배율
+  const spanX = xmax - xmin;
+  const spanY = ymax - ymin;
+
+  const sizeScale = 1.5; // 격자판 도메인 확장 배율
+  const span = Math.max(spanX, spanY);
   const size = Math.max(1, span * sizeScale);
 
-  const divisions = Math.min(
-    200,
-    Math.max(1, Math.round(size / Math.max(0.1, gridStep)))
-  );
+  const divisions = Math.min(200, Math.max(1, Math.round(size / Math.max(0.1, gridStep))));
 
-  // z-fighting 방지: 축을 격자 위로 살짝 올림
-  const zAxis = 0.01;
+  const cx = (xmin + xmax) / 2;
+  const cy = (ymin + ymax) / 2;
 
-  // ✅ 축 두께(원하는 값으로 조절)
-  const axisThickness = 0.06; // 0.04~0.10 추천
-
-  // 축 길이
-  const xLen = Math.max(0.001, xmax - xmin);
-  const yLen = Math.max(0.001, ymax - ymin);
-
-  // 축 중심 위치
-  const xCenter = (xmin + xmax) / 2;
-  const yCenter = (ymin + ymax) / 2;
+  const zAxis = 0.01; // z-fighting 방지
+  const axisThickness = 0.06;
 
   return (
-    <group>
-      {/* XY 평면 격자 */}
+    <group position={[cx, cy, 0]}>
       <gridHelper args={[size, divisions]} rotation={[Math.PI / 2, 0, 0]} />
 
-      {/* x축: 박스로 두께 구현 */}
-      <mesh position={[xCenter, 0, zAxis]}>
-        {/* BoxGeometry: (length, thickness, thickness) */}
-        <boxGeometry args={[xLen, axisThickness, axisThickness]} />
+      {/* x축: 격자판 size와 동일한 길이 */}
+      <mesh position={[0, 0, zAxis]}>
+        <boxGeometry args={[size, axisThickness, axisThickness]} />
         <meshStandardMaterial color="#6039BC" />
       </mesh>
 
-      {/* y축: 박스로 두께 구현 */}
-      <mesh position={[0, yCenter, zAxis]}>
-        <boxGeometry args={[axisThickness, yLen, axisThickness]} />
+      {/* y축: 격자판 size와 동일한 길이 */}
+      <mesh position={[0, 0, zAxis]}>
+        <boxGeometry args={[axisThickness, size, axisThickness]} />
         <meshStandardMaterial color="#6039BC" />
       </mesh>
     </group>
@@ -153,13 +126,7 @@ function Curve({ fn, xmin, xmax, color = "white" }) {
   );
 }
 
-function EditablePoint({
-  index,
-  position,
-  onChange,
-  onCommit,
-  setControlsBusy,
-}) {
+function EditablePoint({ index, position, onChange, onCommit, setControlsBusy }) {
   const tcRef = useRef();
 
   useEffect(() => {
@@ -203,13 +170,7 @@ function EditablePoint({
       </TransformControls>
 
       <group position={[position.x + 0.08, position.y + 0.08, 0]}>
-        <Text
-          fontSize={0.16}
-          anchorX="left"
-          anchorY="bottom"
-          outlineWidth={0.004}
-          outlineColor="black"
-        >
+        <Text fontSize={0.16} anchorX="left" anchorY="bottom" outlineWidth={0.004} outlineColor="black">
           {`(${position.x.toFixed(2)}, ${position.y.toFixed(2)})`}
         </Text>
       </group>
@@ -222,14 +183,13 @@ function DraggablePoint({
   position,
   xmin,
   xmax,
+  ymin,
+  ymax,
   onChange,
   onCommit,
   setControlsBusy,
 }) {
-  const plane = useMemo(
-    () => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0),
-    []
-  );
+  const plane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), []);
   const hit = useRef(new THREE.Vector3());
   const [hovered, setHovered] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -253,12 +213,10 @@ function DraggablePoint({
       let x = hit.current.x;
       let y = hit.current.y;
 
-      if (Number.isFinite(xmin) && Number.isFinite(xmax)) {
-        x = Math.max(xmin, Math.min(xmax, x));
-      }
-      if (Number.isFinite(x) && Number.isFinite(y)) {
-        onChange(index, { x, y });
-      }
+      if (Number.isFinite(xmin) && Number.isFinite(xmax)) x = Math.max(xmin, Math.min(xmax, x));
+      if (Number.isFinite(ymin) && Number.isFinite(ymax)) y = Math.max(ymin, Math.min(ymax, y));
+
+      if (Number.isFinite(x) && Number.isFinite(y)) onChange(index, { x, y });
     }
   };
 
@@ -301,13 +259,7 @@ function DraggablePoint({
       </mesh>
 
       <group position={[position.x + 0.08, position.y + 0.08, 0]}>
-        <Text
-          fontSize={0.16}
-          anchorX="left"
-          anchorY="bottom"
-          outlineWidth={0.004}
-          outlineColor="black"
-        >
+        <Text fontSize={0.16} anchorX="left" anchorY="bottom" outlineWidth={0.004} outlineColor="black">
           {`(${position.x.toFixed(2)}, ${position.y.toFixed(2)})`}
         </Text>
       </group>
@@ -321,12 +273,14 @@ export default function GraphCanvas({
   onPointCommit,
   xmin,
   xmax,
+  ymin,          // ✅ 추가 (없으면 아래에서 xmin/xmax로 fallback)
+  ymax,          // ✅ 추가
   gridStep,
   setGridStep,
   fn,
   typedFn,
   curveKey,
-  // rule editing (optional)
+
   ruleMode = "free",
   setRuleMode,
   rulePolyDegree = 3,
@@ -339,17 +293,22 @@ export default function GraphCanvas({
 
   const [controlsBusy, setControlsBusy] = useState(false);
   const [viewMode, setViewMode] = useState("both"); // typed | fit | both
-  const [uiOpen, setUiOpen] = useState(false); // ✅ 기본값 OFF
-  // ✅ 어떤 패널이 열려있는지 (기본 OFF)
+  const [editMode, setEditMode] = useState("drag"); // arrows | drag
+
+  // ✅ 손 입력 상태는 "useEffect보다 위에서" 선언
+  const handEnabled = useInputPrefs((s) => s.handControlEnabled);
+
+  // ✅ 아코디언 패널: 기본 OFF
   const [openPanel, setOpenPanel] = useState(null);
   // openPanel: "rule" | "view" | "grid" | "edit" | "hand" | "gestures" | null
-const handEnabled = useInputPrefs((s) => s.handControlEnabled);
-  // ✅ 손 입력이 켜지면 "손 제스처" 패널을 자동으로 보여주고(펼쳐주고),
-  // 꺼지면 제스처 패널은 닫아둠
+
+  // ✅ 손 입력 켜면 gestures 자동 오픈(스테일/TDZ 없이 functional update만 사용)
   useEffect(() => {
-    if (handEnabled) setOpenPanel((prev) => prev ?? "gestures");
-    else if (openPanel === "gestures") setOpenPanel(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (handEnabled) {
+      setOpenPanel((p) => p ?? "gestures");
+    } else {
+      setOpenPanel((p) => (p === "gestures" ? null : p));
+    }
   }, [handEnabled]);
 
   const [gridStepLocal, setGridStepLocal] = useState(gridStep ?? 1);
@@ -368,10 +327,10 @@ const handEnabled = useInputPrefs((s) => s.handControlEnabled);
   const showTyped = typedFn && (viewMode === "typed" || viewMode === "both");
   const showFit = fn && (viewMode === "fit" || viewMode === "both");
 
-  const [editMode, setEditMode] = useState("drag"); // arrows | drag
-  const commit = (idx) => onPointCommit?.(idx);
+  const yMinEff = Number.isFinite(ymin) ? ymin : xmin;
+  const yMaxEff = Number.isFinite(ymax) ? ymax : xmax;
 
-  
+  const commit = (idx) => onPointCommit?.(idx);
 
   return (
     <div
@@ -400,41 +359,18 @@ const handEnabled = useInputPrefs((s) => s.handControlEnabled);
         orthographic
         camera={{ zoom: 60, position: [0, 0, 10] }}
         style={{ width: "100%", height: "100%" }}
-        onCreated={({ gl }) =>
-          gl.setClearColor(new THREE.Color("#0f1115"), 1.0)
-        }
+        onCreated={({ gl }) => gl.setClearColor(new THREE.Color("#0f1115"), 1.0)}
       >
-        {/* 손 제스처가 직접 카메라를 조작할 수 있는 API */}
         <CameraControlBridge cameraApiRef={cameraApiRef} />
 
         <ambientLight intensity={0.7} />
         <directionalLight position={[3, 5, 6]} intensity={0.9} />
 
-        <Axes
-          xmin={xmin}
-          xmax={xmax}
-          ymin={xmin}
-          ymax={xmax}
-          gridStep={gridStepEff}
-        />
+        <Axes xmin={xmin} xmax={xmax} ymin={yMinEff} ymax={yMaxEff} gridStep={gridStepEff} />
 
-        {showFit && (
-          <Curve
-            key={curveKey + "|fit"}
-            fn={fn}
-            xmin={xmin}
-            xmax={xmax}
-            color="#64b5f6"
-          />
-        )}
+        {showFit && <Curve key={curveKey + "|fit"} fn={fn} xmin={xmin} xmax={xmax} color="#64b5f6" />}
         {showTyped && (
-          <Curve
-            key={curveKey + "|typed"}
-            fn={typedFn}
-            xmin={xmin}
-            xmax={xmax}
-            color="#ff5252"
-          />
+          <Curve key={curveKey + "|typed"} fn={typedFn} xmin={xmin} xmax={xmax} color="#ff5252" />
         )}
 
         {points.map((p, i) =>
@@ -454,6 +390,8 @@ const handEnabled = useInputPrefs((s) => s.handControlEnabled);
               position={{ x: p.x, y: p.y }}
               xmin={xmin}
               xmax={xmax}
+              ymin={yMinEff}
+              ymax={yMaxEff}
               onChange={(idx, xy) => onPointChange(idx, xy)}
               setControlsBusy={setControlsBusy}
               onCommit={commit}
@@ -461,7 +399,6 @@ const handEnabled = useInputPrefs((s) => s.handControlEnabled);
           )
         )}
 
-        {/* 손 모드에서는 OrbitControls를 꺼서 충돌(원치 않는 회전/줌)을 원천 차단 */}
         <OrbitControls makeDefault enabled={!controlsBusy && !handEnabled} />
       </Canvas>
 
@@ -491,14 +428,14 @@ const handEnabled = useInputPrefs((s) => s.handControlEnabled);
               return (
                 <div
                   style={{
-                    background: "rgba(0,0,0,0.55)",
+                    background: "rgba(0,0,0,0.28)",
                     color: "#fff",
                     borderRadius: 10,
                     fontSize: 11,
                     overflow: "hidden",
                     minWidth: 180,
                     backdropFilter: "blur(6px)",
-                    border: "1px solid rgba(255,255,255,0.08)",
+                    border: "0.5px solid rgba(255,255,255,0.12)",
                   }}
                 >
                   <button
@@ -525,12 +462,7 @@ const handEnabled = useInputPrefs((s) => s.handControlEnabled);
                   </button>
 
                   {isOpen && (
-                    <div
-                      style={{
-                        padding: "8px 10px",
-                        borderTop: "1px solid rgba(255,255,255,0.08)",
-                      }}
-                    >
+                    <div style={{ padding: "8px 10px", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
                       {children}
                     </div>
                   )}
@@ -542,9 +474,7 @@ const handEnabled = useInputPrefs((s) => s.handControlEnabled);
               <>
                 {/* 규칙 기반 편집 */}
                 <Panel id="rule" title="규칙 기반 편집">
-                  <div
-                    style={{ display: "flex", gap: 6, alignItems: "center" }}
-                  >
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                     <select
                       value={ruleMode}
                       onChange={(e) => setRuleMode?.(e.target.value)}
@@ -562,7 +492,11 @@ const handEnabled = useInputPrefs((s) => s.handControlEnabled);
                       <option value="free">자유(수식 고정)</option>
                       <option value="linear">선형: a·x + b</option>
                       <option value="poly">다항식: 차수 고정</option>
+
                       <option value="sin">사인: A·sin(ωx+φ)+C</option>
+                      <option value="cos">코사인: A·cos(ωx+φ)+C</option>
+                      <option value="tan">탄젠트: A·tan(ωx+φ)+C</option>
+
                       <option value="exp">지수: A·exp(kx)+C</option>
                       <option value="log">로그: A·log(kx)+C</option>
                       <option value="power">거듭제곱: A·x^p + C</option>
@@ -574,9 +508,7 @@ const handEnabled = useInputPrefs((s) => s.handControlEnabled);
                         min={0}
                         step={1}
                         value={rulePolyDegree}
-                        onChange={(e) =>
-                          setRulePolyDegree?.(Number(e.target.value))
-                        }
+                        onChange={(e) => setRulePolyDegree?.(Number(e.target.value))}
                         style={{
                           width: 64,
                           background: "rgba(10,10,10,0.85)",
@@ -592,45 +524,25 @@ const handEnabled = useInputPrefs((s) => s.handControlEnabled);
                     )}
                   </div>
 
-                  <div
-                    style={{ marginTop: 6, opacity: 0.75, lineHeight: 1.35 }}
-                  >
-                    점을 드래그한 뒤 놓으면, 선택한 규칙(함수 family)을 유지한
-                    채 파라미터만 갱신됩니다.
+                  <div style={{ marginTop: 6, opacity: 0.75, lineHeight: 1.35 }}>
+                    점을 드래그한 뒤 놓으면, 선택한 규칙(함수 family)을 유지한 채 파라미터만 갱신됩니다.
                   </div>
 
                   {ruleError && (
-                    <div
-                      style={{
-                        marginTop: 6,
-                        color: "#ffcc80",
-                        lineHeight: 1.35,
-                      }}
-                    >
-                      {ruleError}
-                    </div>
+                    <div style={{ marginTop: 6, color: "#ffcc80", lineHeight: 1.35 }}>{ruleError}</div>
                   )}
                 </Panel>
 
                 {/* 보기 */}
                 <Panel id="view" title="보기">
                   <div style={{ display: "flex", gap: 6 }}>
-                    <button
-                      onClick={() => setViewMode("typed")}
-                      style={btnStyle(viewMode === "typed", "#ff5252")}
-                    >
+                    <button onClick={() => setViewMode("typed")} style={btnStyle(viewMode === "typed", "#ff5252")}>
                       수식만
                     </button>
-                    <button
-                      onClick={() => setViewMode("fit")}
-                      style={btnStyle(viewMode === "fit", "#64b5f6")}
-                    >
+                    <button onClick={() => setViewMode("fit")} style={btnStyle(viewMode === "fit", "#64b5f6")}>
                       근사만
                     </button>
-                    <button
-                      onClick={() => setViewMode("both")}
-                      style={btnStyle(viewMode === "both", "#ffffff")}
-                    >
+                    <button onClick={() => setViewMode("both")} style={btnStyle(viewMode === "both", "#ffffff")}>
                       둘다
                     </button>
                   </div>
@@ -638,9 +550,7 @@ const handEnabled = useInputPrefs((s) => s.handControlEnabled);
 
                 {/* 격자 간격 */}
                 <Panel id="grid" title="격자 간격">
-                  <div
-                    style={{ display: "flex", gap: 6, alignItems: "center" }}
-                  >
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                     <input
                       type="number"
                       step="0.5"
@@ -657,40 +567,19 @@ const handEnabled = useInputPrefs((s) => s.handControlEnabled);
                         outline: "none",
                       }}
                     />
-                    <button
-                      onClick={() => setGridStepEff(1)}
-                      style={btnStyle(false, "#ffffff")}
-                    >
-                      1
-                    </button>
-                    <button
-                      onClick={() => setGridStepEff(2)}
-                      style={btnStyle(false, "#ffffff")}
-                    >
-                      2
-                    </button>
-                    <button
-                      onClick={() => setGridStepEff(4)}
-                      style={btnStyle(false, "#ffffff")}
-                    >
-                      4
-                    </button>
+                    <button onClick={() => setGridStepEff(1)} style={btnStyle(false, "#ffffff")}>1</button>
+                    <button onClick={() => setGridStepEff(2)} style={btnStyle(false, "#ffffff")}>2</button>
+                    <button onClick={() => setGridStepEff(4)} style={btnStyle(false, "#ffffff")}>4</button>
                   </div>
                 </Panel>
 
                 {/* 편집 */}
                 <Panel id="edit" title="편집">
                   <div style={{ display: "flex", gap: 6 }}>
-                    <button
-                      onClick={() => setEditMode("arrows")}
-                      style={btnStyle(editMode === "arrows", "#ffffff")}
-                    >
+                    <button onClick={() => setEditMode("arrows")} style={btnStyle(editMode === "arrows", "#ffffff")}>
                       화살표
                     </button>
-                    <button
-                      onClick={() => setEditMode("drag")}
-                      style={btnStyle(editMode === "drag", "#ffffff")}
-                    >
+                    <button onClick={() => setEditMode("drag")} style={btnStyle(editMode === "drag", "#ffffff")}>
                       드래그
                     </button>
                   </div>
@@ -699,9 +588,7 @@ const handEnabled = useInputPrefs((s) => s.handControlEnabled);
                 {/* 손 입력 */}
                 <Panel id="hand" title="손 입력">
                   <HandToggle />
-                  <div
-                    style={{ marginTop: 6, opacity: 0.75, lineHeight: 1.35 }}
-                  >
+                  <div style={{ marginTop: 6, opacity: 0.75, lineHeight: 1.35 }}>
                     손 입력을 켜면 “손 제스처” 패널이 자동으로 활성화됩니다.
                   </div>
                 </Panel>
@@ -709,10 +596,10 @@ const handEnabled = useInputPrefs((s) => s.handControlEnabled);
                 {/* 손 제스처: 손 입력 켰을 때만 표시 */}
                 <Panel id="gestures" title="손 제스처" hidden={!handEnabled}>
                   <div style={{ opacity: 0.9, lineHeight: 1.45 }}>
-                    • 오른손 핀치: 드래그
-                    <br />
+                    • 오른손 핀치: 드래그<br />
                     • 양손 핀치: 줌<br />
-                    • 왼손 펼침: 팬<br />• 오른손 주먹: 회전
+                    • 왼손 펼침: 팬<br />
+                    • 오른손 주먹: 회전
                   </div>
                 </Panel>
               </>
@@ -738,6 +625,7 @@ function btnStyle(active, activeColor) {
 function HandToggle() {
   const enabled = useInputPrefs((s) => s.handControlEnabled);
   const setEnabled = useInputPrefs((s) => s.setHandControlEnabled);
+
   return (
     <button
       onClick={() => setEnabled(!enabled)}
