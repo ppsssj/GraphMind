@@ -185,3 +185,10 @@
 .legend .row.toggle:hover {
   transform: translateY(-1px);
 }
+
+
+
+/* canvas 기본 inline 특성 때문에 생기는 여백/높이 흔들림 방지 */
+.graph-wrap canvas {
+  display: block;
+}

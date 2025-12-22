@@ -19,6 +19,11 @@ export default function ObsidianGraphView({
   const fgRef = useRef(null);
   const wrapRef = useRef(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
+  // ✅ tag↔note만 연결하려면 false
+  const ENABLE_NOTE_NOTE_LINKS = false;
+
+  // ✅ 태그는 "완전 동일 문자열"만 동일 취급(공백 제거)
+  const normalizeTag = (t) => String(t ?? "").trim();
 
   // ✅ 타입별 노출 여부 토글 상태
   const [filters, setFilters] = useState({
@@ -53,11 +58,14 @@ export default function ObsidianGraphView({
       });
     });
 
-    // 태그 노드 + 노트↔태그 링크
+    // 태그 노드 + 노트↔태그 링크 (✅ 완전 동일 문자열만 동일 태그)
     const tagSet = new Set();
     notes.forEach((n) => {
-      (n.tags || []).forEach((t) => {
-        const tagId = `tag:${t}`;
+      (n.tags || []).forEach((raw) => {
+        const t = normalizeTag(raw);
+        if (!t) return;
+
+        const tagId = `tag:${t}`; // ✅ "abc" ≠ "abcd"
         if (!tagSet.has(tagId)) {
           tagSet.add(tagId);
           nodes.push({ id: tagId, label: `#${t}`, type: "tag" });
@@ -66,12 +74,14 @@ export default function ObsidianGraphView({
       });
     });
 
-    // 노트↔노트 링크
-    notes.forEach((n) => {
-      (n.links || []).forEach((lid) => {
-        if (noteIds.has(lid)) links.push({ source: n.id, target: lid });
+    // 노트↔노트 링크 (원하면 true로 켜기)
+    if (ENABLE_NOTE_NOTE_LINKS) {
+      notes.forEach((n) => {
+        (n.links || []).forEach((lid) => {
+          if (noteIds.has(lid)) links.push({ source: n.id, target: lid });
+        });
       });
-    });
+    }
 
     return { nodes, links };
   }, [notes]);
@@ -79,10 +89,16 @@ export default function ObsidianGraphView({
   // === 크기 추적 ===
   useLayoutEffect(() => {
     if (!wrapRef.current) return;
+
     const ro = new ResizeObserver(([entry]) => {
       const r = entry.contentRect;
-      setSize({ w: Math.max(200, r.width), h: Math.max(200, r.height) });
+
+      // 소수점 단위 흔들림 때문에 높이가 계속 미세하게 변하는 케이스 방지
+      const w = Math.max(200, Math.round(r.width));
+      const h = Math.max(200, Math.round(r.height));
+      setSize({ w, h });
     });
+
     ro.observe(wrapRef.current);
     return () => ro.disconnect();
   }, []);
@@ -124,8 +140,11 @@ export default function ObsidianGraphView({
         },
       });
 
-      for (const tag of n.tags || []) {
-        const tagId = `tag:${tag}`;
+      for (const raw of n.tags || []) {
+        const tag = normalizeTag(raw);
+        if (!tag) continue;
+
+        const tagId = `tag:${tag}`; // ✅ 완전 동일만 동일 취급
         if (!seenTags.has(tagId)) {
           seenTags.add(tagId);
           steps.push({
@@ -138,18 +157,32 @@ export default function ObsidianGraphView({
       }
     }
 
-    const noteIds = new Set(notes.map((n) => n.id));
-    const idToTime = new Map(notes.map((n) => [n.id, safeTime(n.updatedAt)]));
-    const dedup = new Set();
+    // const noteIds = new Set(notes.map((n) => n.id));
+    // const idToTime = new Map(notes.map((n) => [n.id, safeTime(n.updatedAt)]));
+    // const dedup = new Set();
     for (const n of notes) {
-      for (const lid of n.links || []) {
-        if (!noteIds.has(lid)) continue;
-        const key = n.id < lid ? `${n.id}|${lid}` : `${lid}|${n.id}`;
-        if (dedup.has(key)) continue;
-        dedup.add(key);
+      if (ENABLE_NOTE_NOTE_LINKS) {
+        const noteIds = new Set(notes.map((n) => n.id));
+        const idToTime = new Map(
+          notes.map((n) => [n.id, safeTime(n.updatedAt)])
+        );
+        const dedup = new Set();
 
-        const t = Math.max(idToTime.get(n.id) || 0, idToTime.get(lid) || 0);
-        steps.push({ t, type: "link", link: { source: n.id, target: lid } });
+        for (const n of notes) {
+          for (const lid of n.links || []) {
+            if (!noteIds.has(lid)) continue;
+            const key = n.id < lid ? `${n.id}|${lid}` : `${lid}|${n.id}`;
+            if (dedup.has(key)) continue;
+            dedup.add(key);
+
+            const t = Math.max(idToTime.get(n.id) || 0, idToTime.get(lid) || 0);
+            steps.push({
+              t,
+              type: "link",
+              link: { source: n.id, target: lid },
+            });
+          }
+        }
       }
     }
 
@@ -288,24 +321,33 @@ export default function ObsidianGraphView({
           nodeRelSize={6}
           nodeCanvasObject={(node, ctx, globalScale) => {
             const label = node.label;
-            const isActive = node.id === activeId;
-            const fontSize = Math.max(8, 4 / globalScale + (isActive ? 3 : 0));
+            const isActive = String(node.id) === String(activeId);
+            const isTag = node.type === "tag";
+
+            // ✅ 크기 정책: note(및 array/curve/surface) > tag, active > normal
+            const r = isTag
+              ? isActive
+                ? 4
+                : 3 // tag는 작게
+              : isActive
+              ? 8
+              : 5; // 노트류는 크게 + 활성 더 크게
+
+            const fontBase = 4 / globalScale;
+            const fontSize = Math.max(
+              isTag ? 8 : 10, // 최소 폰트도 note가 더 큼
+              fontBase + (isTag ? -0.5 : 1.5) + (isActive ? 3 : 0)
+            );
 
             // 타입별 색상
-            let color = "#6ee7b7"; // 기본: equation / 일반 note (green)
-
-            if (node.type === "tag") {
-              color = "#60a5fa"; // Tag: 파란색
-            } else if (node.type === "array") {
-              color = "#f59e0b"; // Array (3D): 주황
-            } else if (node.type === "curve") {
-              color = "#e54848"; // Curve (3D · z-axis): 빨강
-            } else if (node.type === "surface") {
-              color = "#a855f7"; // Surface (3D · z=f(x,y)): 보라
-            }
+            let color = "#6ee7b7"; // 기본 note
+            if (node.type === "tag") color = "#60a5fa";
+            else if (node.type === "array") color = "#f59e0b";
+            else if (node.type === "curve") color = "#e54848";
+            else if (node.type === "surface") color = "#a855f7";
 
             ctx.beginPath();
-            ctx.arc(node.x, node.y, isActive ? 6 : 4, 0, Math.PI * 2, false);
+            ctx.arc(node.x, node.y, r, 0, Math.PI * 2, false);
             ctx.fillStyle = color;
             ctx.globalAlpha = isActive ? 1 : 0.9;
             ctx.fill();
@@ -315,7 +357,9 @@ export default function ObsidianGraphView({
             ctx.textBaseline = "middle";
             ctx.fillStyle = "#e5e7eb";
             ctx.globalAlpha = isActive ? 1 : 0.9;
-            ctx.fillText(` ${label}`, node.x + 6, node.y);
+
+            // 텍스트 시작 위치도 반지름 기준으로 밀기
+            ctx.fillText(` ${label}`, node.x + (r + 2), node.y);
           }}
           onNodeClick={(node) => {
             const id = String(node.id);
