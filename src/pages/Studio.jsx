@@ -484,7 +484,7 @@ export default function Studio() {
   }));
 
   const makeInitialPoints = useCallback(
-    (formula, xmin = -3, xmax = 3, n = 8) => {
+    (formula, xmin = -8, xmax = 8, n = 8) => {
       const fn0 = exprToFn(formula);
       const xs = Array.from(
         { length: n },
@@ -503,8 +503,9 @@ export default function Studio() {
       content: initialType === "array3d" ? initialContent : undefined,
       curve3d: initialType === "curve3d" ? initialCurve3d : undefined, // ✅ 추가
       surface3d: initialType === "surface3d" ? initialSurface3d : undefined,
-      xmin: -3,
-      xmax: 3,
+      xmin: -8,
+      xmax: 8,
+      gridStep: 2,
       degree: 3,
       ruleMode: "free",
       rulePolyDegree: 3,
@@ -654,6 +655,12 @@ export default function Studio() {
         fittedFn: coeffsToFn(coeffs),
         xmin: s.xmin,
         xmax: s.xmax,
+        gridStep: s.gridStep ?? 2,
+        setGridStep: (v) =>
+          setTabState((st) => ({
+            ...st,
+            [tabId]: { ...st[tabId], gridStep: Math.max(0.1, Number(v) || 2) },
+          })),
         points: s.points,
         curveKey: coeffs.map((c) => c.toFixed(6)).join("|") + `|v${s.ver ?? 0}`,
         updatePoint: (idx, xy) =>
@@ -788,8 +795,9 @@ export default function Studio() {
           content: type === "array3d" ? tabContent : undefined,
           curve3d: type === "curve3d" ? curve3dInit : undefined,
           surface3d: type === "surface3d" ? surface3dInit : undefined, // ✅ 추가
-          xmin: -3,
-          xmax: 3,
+          xmin: -8,
+          xmax: 8,
+          gridStep: 2,
           degree: 3,
           ruleMode: "free",
           rulePolyDegree: 3,
@@ -1007,7 +1015,9 @@ export default function Studio() {
           equation: s.equation,
           xmin: s.xmin,
           xmax: s.xmax,
-          degree: s.degree,
+          
+      gridStep: s.gridStep ?? 2,
+degree: s.degree,
           points: s.points,
         };
       }

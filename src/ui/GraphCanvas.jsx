@@ -1,13 +1,21 @@
 // src/ui/GraphCanvas.jsx
 import { useMemo, useRef, useState, useEffect } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
-import { OrbitControls, TransformControls, Text, useCursor } from "@react-three/drei";
+import {
+  OrbitControls,
+  TransformControls,
+  Text,
+  useCursor,
+} from "@react-three/drei";
 import * as THREE from "three";
 
 import { HandInputProvider } from "../input/HandInputProvider";
 import { useInputPrefs } from "../store/useInputPrefs";
 
-function CameraControlBridge({ cameraApiRef, target = new THREE.Vector3(0, 0, 0) }) {
+function CameraControlBridge({
+  cameraApiRef,
+  target = new THREE.Vector3(0, 0, 0),
+}) {
   const { camera, viewport } = useThree();
   const targetRef = useRef(target.clone());
   const sphericalRef = useRef(new THREE.Spherical());
@@ -48,10 +56,12 @@ function CameraControlBridge({ cameraApiRef, target = new THREE.Vector3(0, 0, 0)
         // dYaw/dPitch are small values
         const s = sphericalRef.current;
 
-        s.theta += dYaw;                 // yaw
+        s.theta += dYaw; // yaw
         s.phi = Math.max(0.15, Math.min(Math.PI - 0.15, s.phi + dPitch)); // pitch clamp
 
-        const v = new THREE.Vector3().setFromSpherical(s).add(targetRef.current);
+        const v = new THREE.Vector3()
+          .setFromSpherical(s)
+          .add(targetRef.current);
         camera.position.copy(v);
         camera.lookAt(targetRef.current);
       },
@@ -65,31 +75,47 @@ function CameraControlBridge({ cameraApiRef, target = new THREE.Vector3(0, 0, 0)
   return null;
 }
 
-function Axes({ xmin = -8, xmax = 8, ymin = -8, ymax = 8 }) {
+function Axes({ xmin = -8, xmax = 8, ymin = -8, ymax = 8, gridStep = 1 }) {
+  const span = Math.max(xmax - xmin, ymax - ymin);
+  const sizeScale = 1.5; // 좌표판 넓이 배율
+  const size = Math.max(1, span * sizeScale);
+
+  const divisions = Math.min(
+    200,
+    Math.max(1, Math.round(size / Math.max(0.1, gridStep)))
+  );
+
+  // z-fighting 방지: 축을 격자 위로 살짝 올림
+  const zAxis = 0.01;
+
+  // ✅ 축 두께(원하는 값으로 조절)
+  const axisThickness = 0.06; // 0.04~0.10 추천
+
+  // 축 길이
+  const xLen = Math.max(0.001, xmax - xmin);
+  const yLen = Math.max(0.001, ymax - ymin);
+
+  // 축 중심 위치
+  const xCenter = (xmin + xmax) / 2;
+  const yCenter = (ymin + ymax) / 2;
+
   return (
     <group>
-      <axesHelper args={[8]} />
-      <gridHelper args={[16, 16]} rotation={[Math.PI / 2, 0, 0]} />
+      {/* XY 평면 격자 */}
+      <gridHelper args={[size, divisions]} rotation={[Math.PI / 2, 0, 0]} />
 
-      <line>
-        <bufferGeometry
-          attach="geometry"
-          attributes-position={
-            new THREE.Float32BufferAttribute([xmin, 0, 0, xmax, 0, 0], 3)
-          }
-        />
-        <lineBasicMaterial color="#6039BC" linewidth={3} />
-      </line>
+      {/* x축: 박스로 두께 구현 */}
+      <mesh position={[xCenter, 0, zAxis]}>
+        {/* BoxGeometry: (length, thickness, thickness) */}
+        <boxGeometry args={[xLen, axisThickness, axisThickness]} />
+        <meshStandardMaterial color="#6039BC" />
+      </mesh>
 
-      <line>
-        <bufferGeometry
-          attach="geometry"
-          attributes-position={
-            new THREE.Float32BufferAttribute([0, ymin, 0, 0, ymax, 0], 3)
-          }
-        />
-        <lineBasicMaterial color="#6039BC" linewidth={3} />
-      </line>
+      {/* y축: 박스로 두께 구현 */}
+      <mesh position={[0, yCenter, zAxis]}>
+        <boxGeometry args={[axisThickness, yLen, axisThickness]} />
+        <meshStandardMaterial color="#6039BC" />
+      </mesh>
     </group>
   );
 }
@@ -127,7 +153,13 @@ function Curve({ fn, xmin, xmax, color = "white" }) {
   );
 }
 
-function EditablePoint({ index, position, onChange, onCommit, setControlsBusy }) {
+function EditablePoint({
+  index,
+  position,
+  onChange,
+  onCommit,
+  setControlsBusy,
+}) {
   const tcRef = useRef();
 
   useEffect(() => {
@@ -145,6 +177,7 @@ function EditablePoint({ index, position, onChange, onCommit, setControlsBusy })
       if (!obj) return;
       onChange(index, { x: obj.position.x, y: obj.position.y });
     };
+
     const onDraggingChanged = (e) => {
       const dragging = !!e.value;
       setControlsBusy(dragging);
@@ -170,7 +203,13 @@ function EditablePoint({ index, position, onChange, onCommit, setControlsBusy })
       </TransformControls>
 
       <group position={[position.x + 0.08, position.y + 0.08, 0]}>
-        <Text fontSize={0.16} anchorX="left" anchorY="bottom" outlineWidth={0.004} outlineColor="black">
+        <Text
+          fontSize={0.16}
+          anchorX="left"
+          anchorY="bottom"
+          outlineWidth={0.004}
+          outlineColor="black"
+        >
           {`(${position.x.toFixed(2)}, ${position.y.toFixed(2)})`}
         </Text>
       </group>
@@ -178,8 +217,19 @@ function EditablePoint({ index, position, onChange, onCommit, setControlsBusy })
   );
 }
 
-function DraggablePoint({ index, position, xmin, xmax, onChange, onCommit, setControlsBusy }) {
-  const plane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), []);
+function DraggablePoint({
+  index,
+  position,
+  xmin,
+  xmax,
+  onChange,
+  onCommit,
+  setControlsBusy,
+}) {
+  const plane = useMemo(
+    () => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0),
+    []
+  );
   const hit = useRef(new THREE.Vector3());
   const [hovered, setHovered] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -251,7 +301,13 @@ function DraggablePoint({ index, position, xmin, xmax, onChange, onCommit, setCo
       </mesh>
 
       <group position={[position.x + 0.08, position.y + 0.08, 0]}>
-        <Text fontSize={0.16} anchorX="left" anchorY="bottom" outlineWidth={0.004} outlineColor="black">
+        <Text
+          fontSize={0.16}
+          anchorX="left"
+          anchorY="bottom"
+          outlineWidth={0.004}
+          outlineColor="black"
+        >
           {`(${position.x.toFixed(2)}, ${position.y.toFixed(2)})`}
         </Text>
       </group>
@@ -265,6 +321,8 @@ export default function GraphCanvas({
   onPointCommit,
   xmin,
   xmax,
+  gridStep,
+  setGridStep,
   fn,
   typedFn,
   curveKey,
@@ -280,14 +338,40 @@ export default function GraphCanvas({
   const cameraApiRef = useRef(null);
 
   const [controlsBusy, setControlsBusy] = useState(false);
-
   const [viewMode, setViewMode] = useState("both"); // typed | fit | both
+  const [uiOpen, setUiOpen] = useState(false); // ✅ 기본값 OFF
+  // ✅ 어떤 패널이 열려있는지 (기본 OFF)
+  const [openPanel, setOpenPanel] = useState(null);
+  // openPanel: "rule" | "view" | "grid" | "edit" | "hand" | "gestures" | null
+const handEnabled = useInputPrefs((s) => s.handControlEnabled);
+  // ✅ 손 입력이 켜지면 "손 제스처" 패널을 자동으로 보여주고(펼쳐주고),
+  // 꺼지면 제스처 패널은 닫아둠
+  useEffect(() => {
+    if (handEnabled) setOpenPanel((prev) => prev ?? "gestures");
+    else if (openPanel === "gestures") setOpenPanel(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handEnabled]);
+
+  const [gridStepLocal, setGridStepLocal] = useState(gridStep ?? 1);
+  useEffect(() => {
+    if (gridStep !== undefined) setGridStepLocal(gridStep);
+  }, [gridStep]);
+
+  const gridStepEff = Math.max(0.1, Number(gridStep ?? gridStepLocal) || 1);
+
+  const setGridStepEff = (v) => {
+    const n = Math.max(0.1, Number(v) || 1);
+    if (typeof setGridStep === "function") setGridStep(n);
+    else setGridStepLocal(n);
+  };
+
   const showTyped = typedFn && (viewMode === "typed" || viewMode === "both");
   const showFit = fn && (viewMode === "fit" || viewMode === "both");
 
   const [editMode, setEditMode] = useState("drag"); // arrows | drag
-  const commit = () => onPointCommit?.(points);
-  const handEnabled = useInputPrefs((s) => s.handControlEnabled);
+  const commit = (idx) => onPointCommit?.(idx);
+
+  
 
   return (
     <div
@@ -314,9 +398,11 @@ export default function GraphCanvas({
 
       <Canvas
         orthographic
-        camera={{ zoom: 80, position: [0, 0, 10] }}
+        camera={{ zoom: 60, position: [0, 0, 10] }}
         style={{ width: "100%", height: "100%" }}
-        onCreated={({ gl }) => gl.setClearColor(new THREE.Color("#0f1115"), 1.0)}
+        onCreated={({ gl }) =>
+          gl.setClearColor(new THREE.Color("#0f1115"), 1.0)
+        }
       >
         {/* 손 제스처가 직접 카메라를 조작할 수 있는 API */}
         <CameraControlBridge cameraApiRef={cameraApiRef} />
@@ -324,13 +410,31 @@ export default function GraphCanvas({
         <ambientLight intensity={0.7} />
         <directionalLight position={[3, 5, 6]} intensity={0.9} />
 
-        <Axes />
+        <Axes
+          xmin={xmin}
+          xmax={xmax}
+          ymin={xmin}
+          ymax={xmax}
+          gridStep={gridStepEff}
+        />
 
         {showFit && (
-          <Curve key={curveKey + "|fit"} fn={fn} xmin={xmin} xmax={xmax} color="#64b5f6" />
+          <Curve
+            key={curveKey + "|fit"}
+            fn={fn}
+            xmin={xmin}
+            xmax={xmax}
+            color="#64b5f6"
+          />
         )}
         {showTyped && (
-          <Curve key={curveKey + "|typed"} fn={typedFn} xmin={xmin} xmax={xmax} color="#ff5252" />
+          <Curve
+            key={curveKey + "|typed"}
+            fn={typedFn}
+            xmin={xmin}
+            xmax={xmax}
+            color="#ff5252"
+          />
         )}
 
         {points.map((p, i) =>
@@ -361,125 +465,259 @@ export default function GraphCanvas({
         <OrbitControls makeDefault enabled={!controlsBusy && !handEnabled} />
       </Canvas>
 
-      {/* UI(기존 구성 유지 가능) */}
+      {/* UI: 아코디언(개별 토글) */}
       {showControls && (
         <div
           style={{
             position: "absolute",
             right: 8,
             top: 8,
+            zIndex: 20,
             display: "flex",
             flexWrap: "wrap",
             gap: 8,
             alignItems: "flex-start",
             maxWidth: "calc(100% - 16px)",
             boxSizing: "border-box",
+            justifyContent: "flex-end",
+            pointerEvents: "auto",
           }}
         >
-          {/* Rule-based editing */}
-          <div
-            style={{
-              background: "rgba(0,0,0,0.55)",
-              color: "#fff",
-              padding: "8px 10px",
-              borderRadius: 10,
-              fontSize: 11,
-              minWidth: 240,
-            }}
-          >
-            <div style={{ marginBottom: 6, opacity: 0.9, fontWeight: 600 }}>
-              규칙 기반 편집
-            </div>
+          {(() => {
+            const Panel = ({ id, title, children, hidden = false }) => {
+              if (hidden) return null;
+              const isOpen = openPanel === id;
 
-            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <select
-                value={ruleMode}
-                onChange={(e) => setRuleMode?.(e.target.value)}
-                style={{
-                  flex: 1,
-                  background: "rgba(10,10,10,0.85)",
-                  color: "#fff",
-                  border: "1px solid rgba(255,255,255,0.15)",
-                  borderRadius: 8,
-                  padding: "4px 6px",
-                  outline: "none",
-                  fontSize: 11,
-                }}
-              >
-                <option value="free">자유(수식 고정)</option>
-                <option value="linear">선형: a·x + b</option>
-                <option value="poly">다항식: 차수 고정</option>
-                <option value="sin">사인: A·sin(ωx+φ)+C</option>
-                <option value="exp">지수: A·exp(kx)+C</option>
-                <option value="log">로그: A·log(kx)+C</option>
-                <option value="power">거듭제곱: A·x^p + C</option>
-              </select>
-
-              {ruleMode === "poly" && (
-                <input
-                  type="number"
-                  min={0}
-                  step={1}
-                  value={rulePolyDegree}
-                  onChange={(e) => setRulePolyDegree?.(Number(e.target.value))}
+              return (
+                <div
                   style={{
-                    width: 64,
-                    background: "rgba(10,10,10,0.85)",
+                    background: "rgba(0,0,0,0.55)",
                     color: "#fff",
-                    border: "1px solid rgba(255,255,255,0.15)",
-                    borderRadius: 8,
-                    padding: "4px 6px",
-                    outline: "none",
+                    borderRadius: 10,
                     fontSize: 11,
+                    overflow: "hidden",
+                    minWidth: 180,
+                    backdropFilter: "blur(6px)",
+                    border: "1px solid rgba(255,255,255,0.08)",
                   }}
-                  title="다항 차수"
-                />
-              )}
-            </div>
+                >
+                  <button
+                    onClick={() => setOpenPanel((p) => (p === id ? null : id))}
+                    style={{
+                      width: "100%",
+                      textAlign: "left",
+                      padding: "8px 10px",
+                      background: "transparent",
+                      border: "none",
+                      color: "#fff",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 10,
+                      fontWeight: 700,
+                      letterSpacing: 0.2,
+                    }}
+                    title={isOpen ? "접기" : "펼치기"}
+                  >
+                    <span>{title}</span>
+                    <span style={{ opacity: 0.8 }}>{isOpen ? "▾" : "▸"}</span>
+                  </button>
 
-            <div style={{ marginTop: 6, opacity: 0.75, lineHeight: 1.35 }}>
-              점을 드래그한 뒤 놓으면, 선택한 규칙(함수 family)을 유지한 채 파라미터만 갱신됩니다.
-            </div>
+                  {isOpen && (
+                    <div
+                      style={{
+                        padding: "8px 10px",
+                        borderTop: "1px solid rgba(255,255,255,0.08)",
+                      }}
+                    >
+                      {children}
+                    </div>
+                  )}
+                </div>
+              );
+            };
 
-            {ruleError && (
-              <div style={{ marginTop: 6, color: "#ffcc80", lineHeight: 1.35 }}>
-                {ruleError}
-              </div>
-            )}
-          </div>
+            return (
+              <>
+                {/* 규칙 기반 편집 */}
+                <Panel id="rule" title="규칙 기반 편집">
+                  <div
+                    style={{ display: "flex", gap: 6, alignItems: "center" }}
+                  >
+                    <select
+                      value={ruleMode}
+                      onChange={(e) => setRuleMode?.(e.target.value)}
+                      style={{
+                        flex: 1,
+                        background: "rgba(10,10,10,0.85)",
+                        color: "#fff",
+                        border: "1px solid rgba(255,255,255,0.15)",
+                        borderRadius: 8,
+                        padding: "4px 6px",
+                        outline: "none",
+                        fontSize: 11,
+                      }}
+                    >
+                      <option value="free">자유(수식 고정)</option>
+                      <option value="linear">선형: a·x + b</option>
+                      <option value="poly">다항식: 차수 고정</option>
+                      <option value="sin">사인: A·sin(ωx+φ)+C</option>
+                      <option value="exp">지수: A·exp(kx)+C</option>
+                      <option value="log">로그: A·log(kx)+C</option>
+                      <option value="power">거듭제곱: A·x^p + C</option>
+                    </select>
 
+                    {ruleMode === "poly" && (
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={rulePolyDegree}
+                        onChange={(e) =>
+                          setRulePolyDegree?.(Number(e.target.value))
+                        }
+                        style={{
+                          width: 64,
+                          background: "rgba(10,10,10,0.85)",
+                          color: "#fff",
+                          border: "1px solid rgba(255,255,255,0.15)",
+                          borderRadius: 8,
+                          padding: "4px 6px",
+                          outline: "none",
+                          fontSize: 11,
+                        }}
+                        title="다항 차수"
+                      />
+                    )}
+                  </div>
 
-          <div style={{ background: "rgba(0,0,0,0.55)", color: "#fff", padding: "6px 8px", borderRadius: 8, fontSize: 11 }}>
-            <div style={{ marginBottom: 6, opacity: 0.9 }}>손 제스처</div>
-            <div style={{ opacity: 0.85, lineHeight: 1.35 }}>
-              • 오른손 핀치: 드래그<br />
-              • 양손 핀치: 줌<br />
-              • 왼손 펼침: 팬<br />
-              • 오른손 주먹: 회전
-            </div>
-          </div>
+                  <div
+                    style={{ marginTop: 6, opacity: 0.75, lineHeight: 1.35 }}
+                  >
+                    점을 드래그한 뒤 놓으면, 선택한 규칙(함수 family)을 유지한
+                    채 파라미터만 갱신됩니다.
+                  </div>
 
-          <div style={{ background: "rgba(0,0,0,0.55)", color: "#fff", padding: "6px 8px", borderRadius: 8, fontSize: 11 }}>
-            <div style={{ marginBottom: 6, opacity: 0.9 }}>보기</div>
-            <div style={{ display: "flex", gap: 6 }}>
-              <button onClick={() => setViewMode("typed")} style={btnStyle(viewMode === "typed", "#ff5252")}>수식만</button>
-              <button onClick={() => setViewMode("fit")} style={btnStyle(viewMode === "fit", "#64b5f6")}>근사만</button>
-              <button onClick={() => setViewMode("both")} style={btnStyle(viewMode === "both", "#ffffff")}>둘다</button>
-            </div>
-          </div>
+                  {ruleError && (
+                    <div
+                      style={{
+                        marginTop: 6,
+                        color: "#ffcc80",
+                        lineHeight: 1.35,
+                      }}
+                    >
+                      {ruleError}
+                    </div>
+                  )}
+                </Panel>
 
-          <div style={{ background: "rgba(0,0,0,0.55)", color: "#fff", padding: "6px 8px", borderRadius: 8, fontSize: 11 }}>
-            <div style={{ marginBottom: 6, opacity: 0.9 }}>편집</div>
-            <div style={{ display: "flex", gap: 6 }}>
-              <button onClick={() => setEditMode("arrows")} style={btnStyle(editMode === "arrows", "#ffffff")}>화살표</button>
-              <button onClick={() => setEditMode("drag")} style={btnStyle(editMode === "drag", "#ffffff")}>드래그</button>
-            </div>
-          </div>
+                {/* 보기 */}
+                <Panel id="view" title="보기">
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      onClick={() => setViewMode("typed")}
+                      style={btnStyle(viewMode === "typed", "#ff5252")}
+                    >
+                      수식만
+                    </button>
+                    <button
+                      onClick={() => setViewMode("fit")}
+                      style={btnStyle(viewMode === "fit", "#64b5f6")}
+                    >
+                      근사만
+                    </button>
+                    <button
+                      onClick={() => setViewMode("both")}
+                      style={btnStyle(viewMode === "both", "#ffffff")}
+                    >
+                      둘다
+                    </button>
+                  </div>
+                </Panel>
 
-          <div style={{ background: "rgba(0,0,0,0.55)", color: "#fff", padding: "6px 8px", borderRadius: 8, fontSize: 11 }}>
-            <div style={{ marginBottom: 6, opacity: 0.9 }}>손 입력</div>
-            <HandToggle />
-          </div>
+                {/* 격자 간격 */}
+                <Panel id="grid" title="격자 간격">
+                  <div
+                    style={{ display: "flex", gap: 6, alignItems: "center" }}
+                  >
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="0.1"
+                      value={gridStepEff}
+                      onChange={(e) => setGridStepEff(e.target.value)}
+                      style={{
+                        width: 86,
+                        padding: "4px 6px",
+                        borderRadius: 6,
+                        border: "1px solid rgba(255,255,255,0.25)",
+                        background: "rgba(255,255,255,0.08)",
+                        color: "#fff",
+                        outline: "none",
+                      }}
+                    />
+                    <button
+                      onClick={() => setGridStepEff(1)}
+                      style={btnStyle(false, "#ffffff")}
+                    >
+                      1
+                    </button>
+                    <button
+                      onClick={() => setGridStepEff(2)}
+                      style={btnStyle(false, "#ffffff")}
+                    >
+                      2
+                    </button>
+                    <button
+                      onClick={() => setGridStepEff(4)}
+                      style={btnStyle(false, "#ffffff")}
+                    >
+                      4
+                    </button>
+                  </div>
+                </Panel>
+
+                {/* 편집 */}
+                <Panel id="edit" title="편집">
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      onClick={() => setEditMode("arrows")}
+                      style={btnStyle(editMode === "arrows", "#ffffff")}
+                    >
+                      화살표
+                    </button>
+                    <button
+                      onClick={() => setEditMode("drag")}
+                      style={btnStyle(editMode === "drag", "#ffffff")}
+                    >
+                      드래그
+                    </button>
+                  </div>
+                </Panel>
+
+                {/* 손 입력 */}
+                <Panel id="hand" title="손 입력">
+                  <HandToggle />
+                  <div
+                    style={{ marginTop: 6, opacity: 0.75, lineHeight: 1.35 }}
+                  >
+                    손 입력을 켜면 “손 제스처” 패널이 자동으로 활성화됩니다.
+                  </div>
+                </Panel>
+
+                {/* 손 제스처: 손 입력 켰을 때만 표시 */}
+                <Panel id="gestures" title="손 제스처" hidden={!handEnabled}>
+                  <div style={{ opacity: 0.9, lineHeight: 1.45 }}>
+                    • 오른손 핀치: 드래그
+                    <br />
+                    • 양손 핀치: 줌<br />
+                    • 왼손 펼침: 팬<br />• 오른손 주먹: 회전
+                  </div>
+                </Panel>
+              </>
+            );
+          })()}
         </div>
       )}
     </div>

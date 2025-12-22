@@ -7,6 +7,8 @@ export default function GraphView({
   commitRule,
   xmin,
   xmax,
+  gridStep,
+  setGridStep,
   fittedFn,
   typedFn,
   curveKey,
@@ -29,6 +31,8 @@ export default function GraphView({
         onPointCommit={(pts) => commitRule?.(pts)}
         xmin={xmin}
         xmax={xmax}
+        gridStep={gridStep}
+        setGridStep={setGridStep}
         fn={fittedFn}     // 파랑: 다항 근사
         typedFn={typedFn} // 빨강: 입력 수식
         curveKey={curveKey}
