@@ -4,6 +4,7 @@ import { useLocation } from "react-router-dom";
 import { create, all } from "mathjs";
 import LeftPanel from "../ui/LeftPanel";
 import Toolbar from "../ui/Toolbar";
+import Curve3DToolbar from "../ui/Curve3DToolbar";
 import GraphView from "../ui/GraphView";
 import Array3DView from "../ui/Array3DView";
 import Curve3DView from "../ui/Curve3DView";
@@ -77,7 +78,6 @@ const coeffsToFn = (coeffs) => (x) => {
   return y;
 };
 
-
 // ── rule-based editing (keep formula family, update only parameters) ────────────
 const isFiniteNum = (v) => Number.isFinite(v);
 
@@ -131,10 +131,17 @@ function leastSquaresLinear(xs, ys) {
   // Fit y = a*x + b
   const n = xs.length;
   if (n < 2) return { a: 0, b: ys[0] ?? 0 };
-  let sx = 0, sy = 0, sxx = 0, sxy = 0;
+  let sx = 0,
+    sy = 0,
+    sxx = 0,
+    sxy = 0;
   for (let i = 0; i < n; i++) {
-    const x = xs[i], y = ys[i];
-    sx += x; sy += y; sxx += x * x; sxy += x * y;
+    const x = xs[i],
+      y = ys[i];
+    sx += x;
+    sy += y;
+    sxx += x * x;
+    sxy += x * y;
   }
   const denom = n * sxx - sx * sx;
   if (Math.abs(denom) < 1e-12) {
@@ -147,15 +154,19 @@ function leastSquaresLinear(xs, ys) {
 }
 
 // Lightweight Nelder–Mead (good enough for 3~4 params, small point counts)
-function nelderMead(f, x0, {
-  step = 1,
-  maxIter = 80,
-  tol = 1e-7,
-  alpha = 1,
-  gamma = 2,
-  rho = 0.5,
-  sigma = 0.5,
-} = {}) {
+function nelderMead(
+  f,
+  x0,
+  {
+    step = 1,
+    maxIter = 80,
+    tol = 1e-7,
+    alpha = 1,
+    gamma = 2,
+    rho = 0.5,
+    sigma = 0.5,
+  } = {}
+) {
   const dim = x0.length;
   const simplex = new Array(dim + 1);
   simplex[0] = { x: x0.slice(), fx: f(x0) };
@@ -221,7 +232,9 @@ function nelderMead(f, x0, {
 
     // shrink
     for (let i = 1; i < simplex.length; i++) {
-      const xs = simplex[i].x.map((v, j) => best.x[j] + sigma * (v - best.x[j]));
+      const xs = simplex[i].x.map(
+        (v, j) => best.x[j] + sigma * (v - best.x[j])
+      );
       simplex[i] = { x: xs, fx: f(xs) };
     }
   }
@@ -247,7 +260,8 @@ function fitRuleFromPoints(ruleMode, points, { polyDegree = 3 } = {}) {
   }
 
   if (ruleMode === "linear") {
-    if (points.length < 2) return { ok: false, message: "선형 규칙은 최소 2개 점이 필요합니다." };
+    if (points.length < 2)
+      return { ok: false, message: "선형 규칙은 최소 2개 점이 필요합니다." };
     const { a, b } = leastSquaresLinear(xs, ys);
     const equation = `${fmtNum(a)}*x + ${fmtNum(b)}`;
     const fn = (x) => a * x + b;
@@ -275,8 +289,10 @@ function fitRuleFromPoints(ruleMode, points, { polyDegree = 3 } = {}) {
   };
 
   if (ruleMode === "sin") {
-    if (points.length < 3) return { ok: false, message: "사인 규칙은 최소 3개 점이 필요합니다." };
-    const yMin = Math.min(...ys), yMax = Math.max(...ys);
+    if (points.length < 3)
+      return { ok: false, message: "사인 규칙은 최소 3개 점이 필요합니다." };
+    const yMin = Math.min(...ys),
+      yMax = Math.max(...ys);
     const A0 = (yMax - yMin) / 2 || 1;
     const C0 = (yMax + yMin) / 2 || 0;
     const w0 = 1; // 기본 주파수
@@ -284,27 +300,36 @@ function fitRuleFromPoints(ruleMode, points, { polyDegree = 3 } = {}) {
     const x0 = [A0, w0, p0, C0];
 
     const f = (v) => {
-      const A = v[0], w = Math.max(1e-6, Math.abs(v[1])), phi = v[2], C = v[3];
+      const A = v[0],
+        w = Math.max(1e-6, Math.abs(v[1])),
+        phi = v[2],
+        C = v[3];
       return sse((x) => A * Math.sin(w * x + phi) + C);
     };
     const [A, wRaw, phiRaw, C] = nelderMead(f, x0, { step: 0.35, maxIter: 90 });
     const w = Math.max(1e-6, Math.abs(wRaw));
     const phi = phiRaw;
-    const equation = `${fmtNum(A)}*sin(${fmtNum(w)}*x + ${fmtNum(phi)}) + ${fmtNum(C)}`;
+    const equation = `${fmtNum(A)}*sin(${fmtNum(w)}*x + ${fmtNum(
+      phi
+    )}) + ${fmtNum(C)}`;
     const fn = (x) => A * Math.sin(w * x + phi) + C;
     return { ok: true, equation, fn, message: null };
   }
 
   if (ruleMode === "exp") {
-    if (points.length < 3) return { ok: false, message: "지수 규칙은 최소 3개 점이 필요합니다." };
-    const yMin = Math.min(...ys), yMax = Math.max(...ys);
+    if (points.length < 3)
+      return { ok: false, message: "지수 규칙은 최소 3개 점이 필요합니다." };
+    const yMin = Math.min(...ys),
+      yMax = Math.max(...ys);
     const C0 = yMin; // baseline
-    const A0 = (yMax - yMin) || 1;
+    const A0 = yMax - yMin || 1;
     const k0 = 0.3;
     const x0 = [A0, k0, C0];
 
     const f = (v) => {
-      const A = v[0], k = v[1], C = v[2];
+      const A = v[0],
+        k = v[1],
+        C = v[2];
       // avoid overflow
       return sse((x) => {
         const z = clamp(k * x, -30, 30);
@@ -319,16 +344,23 @@ function fitRuleFromPoints(ruleMode, points, { polyDegree = 3 } = {}) {
 
   if (ruleMode === "log") {
     if (points.some((p) => p.x <= 0)) {
-      return { ok: false, message: "로그 규칙은 x>0 범위에서만 동작합니다. (점의 x를 양수로 이동하세요.)" };
+      return {
+        ok: false,
+        message:
+          "로그 규칙은 x>0 범위에서만 동작합니다. (점의 x를 양수로 이동하세요.)",
+      };
     }
-    const yMin = Math.min(...ys), yMax = Math.max(...ys);
-    const A0 = (yMax - yMin) || 1;
+    const yMin = Math.min(...ys),
+      yMax = Math.max(...ys);
+    const A0 = yMax - yMin || 1;
     const C0 = (yMax + yMin) / 2 || 0;
     const k0 = 1;
     const x0 = [A0, k0, C0];
 
     const f = (v) => {
-      const A = v[0], k = Math.max(1e-6, Math.abs(v[1])), C = v[2];
+      const A = v[0],
+        k = Math.max(1e-6, Math.abs(v[1])),
+        C = v[2];
       return sse((x) => A * Math.log(k * x) + C);
     };
     const [A, kRaw, C] = nelderMead(f, x0, { step: 0.25, maxIter: 90 });
@@ -340,21 +372,28 @@ function fitRuleFromPoints(ruleMode, points, { polyDegree = 3 } = {}) {
 
   if (ruleMode === "power") {
     if (points.some((p) => p.x <= 0)) {
-      return { ok: false, message: "거듭제곱 규칙은 x>0 범위에서만 안정적으로 동작합니다. (점의 x를 양수로 이동하세요.)" };
+      return {
+        ok: false,
+        message:
+          "거듭제곱 규칙은 x>0 범위에서만 안정적으로 동작합니다. (점의 x를 양수로 이동하세요.)",
+      };
     }
-    const yMin = Math.min(...ys), yMax = Math.max(...ys);
+    const yMin = Math.min(...ys),
+      yMax = Math.max(...ys);
     const C0 = yMin;
-    const A0 = (yMax - yMin) || 1;
+    const A0 = yMax - yMin || 1;
     const p0 = 1;
     const x0 = [A0, p0, C0];
 
     const f = (v) => {
-      const A = v[0], p = v[1], C = v[2];
-      return sse((x) => A * (x ** p) + C);
+      const A = v[0],
+        p = v[1],
+        C = v[2];
+      return sse((x) => A * x ** p + C);
     };
     const [A, p, C] = nelderMead(f, x0, { step: 0.25, maxIter: 100 });
     const equation = `${fmtNum(A)}*x^(${fmtNum(p)}) + ${fmtNum(C)}`;
-    const fn = (x) => A * (x ** p) + C;
+    const fn = (x) => A * x ** p + C;
     return { ok: true, equation, fn, message: null };
   }
 
@@ -425,20 +464,53 @@ export default function Studio() {
   // ✅ curve3d 초기 파라미터
   const initialCurve3d =
     initialType === "curve3d"
-      ? {
-          xExpr:
-            location.state?.curve3d?.xExpr ?? location.state?.xExpr ?? "cos(t)",
-          yExpr:
-            location.state?.curve3d?.yExpr ?? location.state?.yExpr ?? "sin(t)",
-          zExpr: location.state?.curve3d?.zExpr ?? location.state?.zExpr ?? "0",
-          tMin: location.state?.curve3d?.tMin ?? location.state?.tMin ?? 0,
-          tMax:
+      ? (() => {
+          const xExpr =
+            location.state?.curve3d?.xExpr ?? location.state?.xExpr ?? "cos(t)";
+          const yExpr =
+            location.state?.curve3d?.yExpr ?? location.state?.yExpr ?? "sin(t)";
+          const zExpr =
+            location.state?.curve3d?.zExpr ?? location.state?.zExpr ?? "0";
+
+          const tMin =
+            location.state?.curve3d?.tMin ?? location.state?.tMin ?? 0;
+          const tMax =
             location.state?.curve3d?.tMax ??
             location.state?.tMax ??
-            6.283185307179586, // 2π 정도
-          samples:
-            location.state?.curve3d?.samples ?? location.state?.samples ?? 400,
-        }
+            6.283185307179586; // 2π 정도
+          const samples =
+            location.state?.curve3d?.samples ?? location.state?.samples ?? 400;
+
+          const editMode =
+            location.state?.curve3d?.editMode ??
+            location.state?.editMode ??
+            "drag";
+
+          const markers = location.state?.curve3d?.markers ??
+            location.state?.markers ?? [
+              { id: 0, t: tMin },
+              { id: 1, t: (tMin + tMax) / 2, label: "vertex" },
+              { id: 2, t: tMax },
+            ];
+
+          const baseXExpr = location.state?.curve3d?.baseXExpr ?? xExpr;
+          const baseYExpr = location.state?.curve3d?.baseYExpr ?? yExpr;
+          const baseZExpr = location.state?.curve3d?.baseZExpr ?? zExpr;
+
+          return {
+            baseXExpr,
+            baseYExpr,
+            baseZExpr,
+            xExpr,
+            yExpr,
+            zExpr,
+            tMin,
+            tMax,
+            samples,
+            markers,
+            editMode,
+          };
+        })()
       : undefined;
 
   // ✅ surface3d 초기 파라미터
@@ -613,7 +685,10 @@ export default function Studio() {
         if (!res.ok) {
           setTabState((st) => ({
             ...st,
-            [tabId]: { ...st[tabId], ruleError: res.message ?? "규칙 적용 실패" },
+            [tabId]: {
+              ...st[tabId],
+              ruleError: res.message ?? "규칙 적용 실패",
+            },
           }));
           return;
         }
@@ -621,7 +696,11 @@ export default function Studio() {
         if (ruleMode === "free") {
           setTabState((st) => ({
             ...st,
-            [tabId]: { ...st[tabId], ruleError: null, ver: (st[tabId].ver ?? 0) + 1 },
+            [tabId]: {
+              ...st[tabId],
+              ruleError: null,
+              ver: (st[tabId].ver ?? 0) + 1,
+            },
           }));
           return;
         }
@@ -667,7 +746,9 @@ export default function Studio() {
         updatePoint: (idx, xy) =>
           setTabState((st) => {
             const cur = st[tabId];
-            const nextPts = cur.points.map((p, i) => (i === idx ? { ...p, ...xy } : p));
+            const nextPts = cur.points.map((p, i) =>
+              i === idx ? { ...p, ...xy } : p
+            );
             return {
               ...st,
               [tabId]: { ...cur, points: nextPts },
@@ -685,10 +766,10 @@ export default function Studio() {
     [tabState, updateVaultFormula]
   );
 
-
   // ── AI graph commands: extrema/roots/intersections → markers ─────────────────
   const sampleExtremum = (fn, xmin, xmax, samples = 2500, kind = "max") => {
-    const lo = Number(xmin), hi = Number(xmax);
+    const lo = Number(xmin),
+      hi = Number(xmax);
     if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) return null;
     const a = Math.min(lo, hi);
     const b = Math.max(lo, hi);
@@ -719,13 +800,15 @@ export default function Studio() {
   };
 
   const bisectRoot = (fn, a, b, maxIter = 60, tol = 1e-6) => {
-    let fa = fn(a), fb = fn(b);
+    let fa = fn(a),
+      fb = fn(b);
     if (!Number.isFinite(fa) || !Number.isFinite(fb)) return null;
     if (fa === 0) return a;
     if (fb === 0) return b;
     if (fa * fb > 0) return null;
 
-    let lo = a, hi = b;
+    let lo = a,
+      hi = b;
     for (let i = 0; i < maxIter; i++) {
       const mid = (lo + hi) / 2;
       const fm = fn(mid);
@@ -743,7 +826,8 @@ export default function Studio() {
   };
 
   const findRoots = (fn, xmin, xmax, samples = 2500, maxRoots = 12) => {
-    const lo = Number(xmin), hi = Number(xmax);
+    const lo = Number(xmin),
+      hi = Number(xmax);
     if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) return [];
     const a = Math.min(lo, hi);
     const b = Math.max(lo, hi);
@@ -778,7 +862,8 @@ export default function Studio() {
     roots.sort((p, q) => p - q);
     const dedup = [];
     for (const r of roots) {
-      if (!dedup.length || Math.abs(r - dedup[dedup.length - 1]) > 1e-3) dedup.push(r);
+      if (!dedup.length || Math.abs(r - dedup[dedup.length - 1]) > 1e-3)
+        dedup.push(r);
     }
     return dedup.slice(0, maxRoots);
   };
@@ -816,7 +901,8 @@ export default function Studio() {
       const pack = deriveFor(tabId);
       if (!pack) return;
 
-      const pickFn = (target) => (target === "fit" ? pack.fittedFn : pack.typedFn);
+      const pickFn = (target) =>
+        target === "fit" ? pack.fittedFn : pack.typedFn;
       const xmin = pack.xmin;
       const xmax = pack.xmax;
 
@@ -863,7 +949,13 @@ export default function Studio() {
         }
 
         if (action === "mark_roots" || action === "find_roots") {
-          const roots = findRoots(fn, xmin, xmax, samples, Number(args.maxRoots) || 12);
+          const roots = findRoots(
+            fn,
+            xmin,
+            xmax,
+            samples,
+            Number(args.maxRoots) || 12
+          );
           roots.forEach((r, idx) => {
             const y = fn(r);
             if (!Number.isFinite(y)) return;
@@ -878,10 +970,19 @@ export default function Studio() {
           continue;
         }
 
-        if (action === "mark_intersections" || action === "find_intersections") {
+        if (
+          action === "mark_intersections" ||
+          action === "find_intersections"
+        ) {
           const other = target === "fit" ? pack.typedFn : pack.fittedFn;
           const diff = (x) => fn(x) - other(x);
-          const xs = findRoots(diff, xmin, xmax, samples, Number(args.maxIntersections) || 12);
+          const xs = findRoots(
+            diff,
+            xmin,
+            xmax,
+            samples,
+            Number(args.maxIntersections) || 12
+          );
           xs.forEach((x, idx) => {
             const y = fn(x);
             if (!Number.isFinite(y)) return;
@@ -909,14 +1010,12 @@ export default function Studio() {
     [deriveFor, focusedPane, panes]
   );
 
-
   const leftActiveId = panes.left.activeId;
   const rightActiveId = panes.right.activeId;
   const leftPack = deriveFor(leftActiveId);
   const rightPack = deriveFor(rightActiveId);
   const leftActive = leftActiveId ? tabState[leftActiveId] : null;
   const rightActive = rightActiveId ? tabState[rightActiveId] : null;
-
 
   // 탭 ops
   const setActive = (paneKey, id) => {
@@ -951,9 +1050,11 @@ export default function Studio() {
             : raw && typeof raw === "object"
             ? raw
             : {};
+
         const xExpr = payload.xExpr ?? payload.x ?? "cos(t)";
         const yExpr = payload.yExpr ?? payload.y ?? "sin(t)";
         const zExpr = payload.zExpr ?? payload.z ?? "0";
+
         const tRange = payload.tRange;
         const tMin =
           payload.tMin ?? (Array.isArray(tRange) ? tRange[0] : undefined) ?? 0;
@@ -961,8 +1062,33 @@ export default function Studio() {
           payload.tMax ??
           (Array.isArray(tRange) ? tRange[1] : undefined) ??
           2 * Math.PI;
+
         const samples = payload.samples ?? payload.sample ?? 400;
-        curve3dInit = { xExpr, yExpr, zExpr, tMin, tMax, samples };
+        const editMode = payload.editMode ?? "drag";
+
+        const baseXExpr = payload.baseXExpr ?? xExpr;
+        const baseYExpr = payload.baseYExpr ?? yExpr;
+        const baseZExpr = payload.baseZExpr ?? zExpr;
+
+        const markers = payload.markers ?? [
+          { id: 0, t: tMin },
+          { id: 1, t: (tMin + tMax) / 2, label: "vertex" },
+          { id: 2, t: tMax },
+        ];
+
+        curve3dInit = {
+          baseXExpr,
+          baseYExpr,
+          baseZExpr,
+          xExpr,
+          yExpr,
+          zExpr,
+          tMin,
+          tMax,
+          samples,
+          markers,
+          editMode,
+        };
       }
 
       // ✅ surface3d 초기값 (z = f(x,y))
@@ -1242,9 +1368,9 @@ export default function Studio() {
           equation: s.equation,
           xmin: s.xmin,
           xmax: s.xmax,
-          
-      gridStep: s.gridStep ?? 1,
-degree: s.degree,
+
+          gridStep: s.gridStep ?? 1,
+          degree: s.degree,
           points: s.points,
         };
       }
@@ -1328,6 +1454,24 @@ degree: s.degree,
     if (!Number.isFinite(num)) return;
     activeUpdate({ xmax: num });
   };
+
+  // ✅ curve3d 상태 업데이트 (SSOT: Studio)
+  const updateCurve3D = useCallback(
+    (tabId, patch) => {
+      if (!tabId) return;
+      setTabState((st) => ({
+        ...st,
+        [tabId]: {
+          ...st[tabId],
+          curve3d: {
+            ...(st[tabId]?.curve3d || {}),
+            ...patch,
+          },
+        },
+      }));
+    },
+    [setTabState]
+  );
 
   const applyEquation = () => {
     if (!active || !activeId) return;
@@ -1458,7 +1602,6 @@ degree: s.degree,
             createTab(null, "left", "array3d", res.content, res.title)
           }
           onOpenResource={(res) => {
-            // pane별로 이미 열린 리소스(vaultId) 검사 (모든 타입에 대해 중복 방지)
             if (res.id != null) {
               const paneKeys = ["left", "right"];
               for (const paneKey of paneKeys) {
@@ -1473,7 +1616,7 @@ degree: s.degree,
                 }
               }
             }
-            // 새로 열 때는 LeftPanel에서 연다는 의도로 좌측에 생성
+
             if (res.type === "curve3d") {
               createTab(res, "left", "curve3d", res, res.title, res.id);
             } else if (res.type === "equation") {
@@ -1495,20 +1638,21 @@ degree: s.degree,
                 res.id
               );
             } else if (res.type === "surface3d") {
-              // ✅ surface3d용 분기 추가
               const payload = res.surface3d || res;
               createTab(
-                payload, // raw
-                "left", // pane
-                "surface3d", // tabType
-                payload, // tabContent (expr, xMin, xMax, yMin, yMax, nx, ny 등)
+                payload,
+                "left",
+                "surface3d",
+                payload,
                 res.title,
-                res.id ?? null // vaultId
+                res.id ?? null
               );
             }
           }}
         />
       )}
+
+      {/* ✅ studio-main은 1번만 */}
       <div className="studio-main">
         {/* 상단 Toolbar 영역 */}
         {active && active.type === "equation" ? (
@@ -1531,6 +1675,13 @@ degree: s.degree,
             data={active.content}
             isSplit={isSplit}
             setIsSplit={setIsSplit}
+          />
+        ) : active && active.type === "curve3d" ? (
+          <Curve3DToolbar
+            curve3d={active.curve3d}
+            onChange={(patch) => updateCurve3D(activeId, patch)}
+            showLeftPanel={showLeftPanel}
+            onToggleLeftPanel={() => setShowLeftPanel((v) => !v)}
           />
         ) : null}
 
@@ -1569,12 +1720,13 @@ degree: s.degree,
                 )
               ) : leftActive && leftActive.type === "array3d" ? (
                 <Array3DView data={leftActive.content} />
-              ) : leftActive && leftActive.type === "curve3d" ? ( // ✅ 추가
+              ) : leftActive && leftActive.type === "curve3d" ? (
                 <Curve3DView
                   key={`curve-left-${leftActiveId}-${leftActive.vaultId ?? ""}`}
                   curve3d={leftActive.curve3d}
+                  onChange={(patch) => updateCurve3D(leftActiveId, patch)}
                 />
-              ) : leftActive && leftActive.type === "surface3d" ? ( // ✅ 추가
+              ) : leftActive && leftActive.type === "surface3d" ? (
                 <Surface3DView
                   key={`surface-left-${leftActiveId}-${
                     leftActive.vaultId ?? ""
@@ -1620,7 +1772,7 @@ degree: s.degree,
                         fittedFn={rightPack.fittedFn}
                         typedFn={rightPack.typedFn}
                         curveKey={rightPack.curveKey}
-                    markers={rightActive?.markers ?? []}
+                        markers={rightActive?.markers ?? []}
                         commitRule={rightPack.commitRule}
                         ruleMode={rightPack.ruleMode}
                         setRuleMode={rightPack.setRuleMode}
@@ -1636,14 +1788,15 @@ degree: s.degree,
                     )
                   ) : rightActive && rightActive.type === "array3d" ? (
                     <Array3DView data={rightActive.content} />
-                  ) : rightActive && rightActive.type === "curve3d" ? ( // ✅ 추가
+                  ) : rightActive && rightActive.type === "curve3d" ? (
                     <Curve3DView
                       key={`curve-right-${rightActiveId}-${
                         rightActive.vaultId ?? ""
                       }`}
                       curve3d={rightActive.curve3d}
+                      onChange={(patch) => updateCurve3D(rightActiveId, patch)}
                     />
-                  ) : rightActive && rightActive.type === "surface3d" ? ( // ✅ 추가
+                  ) : rightActive && rightActive.type === "surface3d" ? (
                     <Surface3DView
                       key={`surface-right-${rightActiveId}-${
                         rightActive.vaultId ?? ""
@@ -1660,20 +1813,19 @@ degree: s.degree,
               </div>
             </div>
           ) : (
-            // 분할이 없을 때는 항상 분할 생성 드롭존을 보여준다
-            !isSplit && (
-              <div
-                className="split-ghost-drop"
-                onDragEnter={onDropZoneEnter}
-                onDragOver={onRightDropOver}
-                onDragLeave={onDropZoneLeave}
-                onDrop={onRightDrop}
-                title="여기로 드롭하면 화면이 분할됩니다"
-              />
-            )
+            <div
+              className="split-ghost-drop"
+              onDragEnter={onDropZoneEnter}
+              onDragOver={onRightDropOver}
+              onDragLeave={onDropZoneLeave}
+              onDrop={onRightDrop}
+              title="여기로 드롭하면 화면이 분할됩니다"
+            />
           )}
         </div>
       </div>
+
+      {/* FAB + AI Panel 은 studio-root 직속으로 */}
       <button
         className="ai-fab"
         type="button"
@@ -1682,7 +1834,6 @@ degree: s.degree,
         <span className="ai-fab-icon">AI</span>
       </button>
 
-      {/* AI 사이드 패널 */}
       <AIPanel
         isOpen={isAIPanelOpen}
         onClose={() => setIsAIPanelOpen(false)}

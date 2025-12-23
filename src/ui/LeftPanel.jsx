@@ -1,6 +1,7 @@
 // src/ui/LeftPanel.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { create, all } from "mathjs";
+import "../styles/LeftPanel.css";
 
 const math = create(all, {});
 
@@ -439,7 +440,7 @@ export default function LeftPanel({
   const [q, setQ] = useState("");
   const [tag, setTag] = useState("all");
   const [showQuick, setShowQuick] = useState(false);
-  // panel width / collapse state for drag-to-open/close
+  // drag-to-resize state
   const [panelWidth, setPanelWidth] = useState(() => {
     try {
       const v = parseInt(localStorage.getItem("gm_leftPanelWidth"), 10);
@@ -593,60 +594,24 @@ export default function LeftPanel({
     console.warn("[LeftPanel] onOpenArray/onOpenResource 콜백이 없습니다.");
   };
 
-  const containerStyle = {
-    width: collapsed ? 36 : panelWidth,
-    minWidth: 36,
-    maxWidth: 1200,
-    position: "relative",
-    transition: draggingRef.current ? "none" : "width 120ms ease",
-  };
+  const widthStyle = { width: collapsed ? 36 : panelWidth };
+  const cls = ["left-panel", "explorer", collapsed ? "collapsed" : "", draggingRef.current ? "resizing" : ""].join(" ");
 
   return (
-    <aside className="left-panel explorer" style={containerStyle}>
-      {/* resizer (right edge) */}
-      <div
-        onPointerDown={handleResizerPointerDown}
-        style={{
-          position: "absolute",
-          top: 0,
-          right: 0,
-          bottom: 0,
-          width: 8,
-          cursor: "col-resize",
-          zIndex: 30,
-        }}
-        aria-hidden="true"
-      />
+    <aside className={cls} style={widthStyle}>
+      <div className="lp-resizer" onPointerDown={handleResizerPointerDown} aria-hidden="true">
+        <div className="lp-grip" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+      </div>
 
-      {/* collapsed handle (when collapsed) - small visible bar to grab */}
       {collapsed && (
-        <div
-          onPointerDown={handleResizerPointerDown}
-          style={{
-            position: "absolute",
-            top: "40%",
-            right: 0,
-            width: 12,
-            height: 48,
-            background: "rgba(60,70,90,0.6)",
-            borderTopLeftRadius: 4,
-            borderBottomLeftRadius: 4,
-            cursor: "col-resize",
-            zIndex: 31,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "#c6d0f5",
-            fontSize: 12,
-          }}
-          title="Drag to open"
-        >
-          ◀
+        <div className="lp-collapsed-handle" onPointerDown={handleResizerPointerDown} title="Drag to open">
+          <span className="lp-arrow">◀</span>
         </div>
       )}
-
-      {/* panel content - hide when fully collapsed */}
-      <div style={{ display: collapsed ? "none" : "block", height: "100%" }}>
       {/* Open / New */}
       <div className="section">
         <div className="label">Open Graph</div>
@@ -957,7 +922,6 @@ export default function LeftPanel({
 
       <div className="note">
         Tip: 상단 탭을 드래그해 오른쪽으로 떼면 VSCode처럼 화면이 분할돼요.
-      </div>
       </div>
     </aside>
   );
