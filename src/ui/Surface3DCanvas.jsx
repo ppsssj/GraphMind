@@ -1,5 +1,5 @@
 // src/ui/Surface3DCanvas.jsx
-import { useMemo, useEffect, useState, useRef } from "react";
+import { useMemo, useEffect } from "react";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Text } from "@react-three/drei";
 import * as THREE from "three";
@@ -31,75 +31,30 @@ function makeScalarFn(expr) {
 }
 
 /**
- * ✅ Curve3D의 "정육면체 내부 라티스"와 동일한 방식의 3D 격자 (직육면체 지원)
+ * ✅ Curve3D와 동일한 "정육면체(직육면체) 내부 라티스" 격자
  * - gridMode: "off" | "box" | "major" | "full"
  * - gridStep: 메이저 격자 간격
  * - minorDiv: full 모드에서 minorStep = gridStep / minorDiv
- *
- * Surface3D의 월드 좌표계:
- *  - world.x = x
- *  - world.y = z = f(x,y)   (수직축)
- *  - world.z = y           (입력 y가 깊이축)
  */
 function CubeLatticeGrid({
-  xMin,
-  xMax,
-  yMin, // input y min (world z)
-  yMax, // input y max (world z)
-  zMin, // function z min (world y)
-  zMax, // function z max (world y)
+  bounds, // { xmin,xmax, ymin,ymax, zmin,zmax } in WORLD axes
   gridMode = "major",
   gridStep = 1,
   minorDiv = 4,
 }) {
   const mode = ["off", "box", "major", "full"].includes(String(gridMode)) ? String(gridMode) : "major";
-
-  const bounds = useMemo(() => {
-    const xmin = Number(xMin);
-    const xmax = Number(xMax);
-    const zmin = Number(yMin);
-    const zmax = Number(yMax);
-    const ymin = Number(zMin);
-    const ymax = Number(zMax);
-
-    const ok = [xmin, xmax, zmin, zmax, ymin, ymax].every((v) => Number.isFinite(v));
-    if (!ok) return null;
-
-    // 정렬 및 최소 두께 보장
-    const bx0 = Math.min(xmin, xmax);
-    const bx1 = Math.max(xmin, xmax);
-    const bz0 = Math.min(zmin, zmax);
-    const bz1 = Math.max(zmin, zmax);
-    const by0 = Math.min(ymin, ymax);
-    const by1 = Math.max(ymin, ymax);
-
-    // 너무 납작하면 약간 두께 보정
-    const eps = 1e-6;
-    const padY = Math.max(0, (by1 - by0 < eps ? 1 : 0) * 0.5);
-
-    return {
-      xmin: bx0,
-      xmax: bx1,
-      zmin: bz0,
-      zmax: bz1,
-      ymin: by0 - padY,
-      ymax: by1 + padY,
-    };
-  }, [xMin, xMax, yMin, yMax, zMin, zMax]);
+  const b = bounds;
 
   const buildCoords = (minV, maxV, step, maxDivisions) => {
     const s = Math.max(0.1, Number(step) || 1);
     const coords = [];
 
-    // 눈금 시작을 gridStep에 스냅(시각적으로 안정)
     const start = Math.ceil(minV / s) * s;
     for (let v = start; v <= maxV + 1e-6; v += s) coords.push(v);
 
-    // 끝점 포함 보장
     if (coords.length === 0 || Math.abs(coords[0] - minV) > 1e-6) coords.unshift(minV);
     if (Math.abs(coords[coords.length - 1] - maxV) > 1e-6) coords.push(maxV);
 
-    // 과도한 라인 폭증 방지
     if (coords.length > maxDivisions + 1) {
       const n = maxDivisions;
       coords.length = 0;
@@ -108,19 +63,16 @@ function CubeLatticeGrid({
     return { coords, step: s };
   };
 
-  const buildCuboidLatticePositions = (xs, ys, zs, xmin, xmax, ymin, ymax, zmin, zmax) => {
+  const buildLatticePositions = (xs, ys, zs, xmin, xmax, ymin, ymax, zmin, zmax) => {
     const nx = xs.length;
     const ny = ys.length;
     const nz = zs.length;
 
-    // x-lines: for each (y,z)  => nx? no, each line uses xmin->xmax so count = ny*nz
-    // y-lines: for each (x,z) => nx*nz
-    // z-lines: for each (x,y) => nx*ny
     const lineCount = ny * nz + nx * nz + nx * ny;
     const arr = new Float32Array(lineCount * 2 * 3);
     let o = 0;
 
-    // X 방향 라인: (y,z)마다 x = xmin..xmax
+    // X lines (y,z fixed)
     for (let yi = 0; yi < ny; yi++) {
       for (let zi = 0; zi < nz; zi++) {
         const y = ys[yi];
@@ -134,7 +86,7 @@ function CubeLatticeGrid({
       }
     }
 
-    // Y 방향 라인: (x,z)마다 y = ymin..ymax
+    // Y lines (x,z fixed)
     for (let xi = 0; xi < nx; xi++) {
       for (let zi = 0; zi < nz; zi++) {
         const x = xs[xi];
@@ -148,7 +100,7 @@ function CubeLatticeGrid({
       }
     }
 
-    // Z 방향 라인: (x,y)마다 z = zmin..zmax
+    // Z lines (x,y fixed)
     for (let xi = 0; xi < nx; xi++) {
       for (let yi = 0; yi < ny; yi++) {
         const x = xs[xi];
@@ -166,15 +118,15 @@ function CubeLatticeGrid({
   };
 
   const edgesGeo = useMemo(() => {
-    if (!bounds) return null;
-    const { xmin, xmax, ymin, ymax, zmin, zmax } = bounds;
-    const w = xmax - xmin;
-    const h = ymax - ymin;
-    const d = zmax - zmin;
-    const box = new THREE.BoxGeometry(w, h, d);
-    box.translate(xmin + w / 2, ymin + h / 2, zmin + d / 2);
+    if (!b || mode === "off") return null;
+    const w = b.xmax - b.xmin;
+    const h = b.ymax - b.ymin;
+    const d = b.zmax - b.zmin;
+
+    const box = new THREE.BoxGeometry(Math.max(1e-6, w), Math.max(1e-6, h), Math.max(1e-6, d));
+    box.translate(b.xmin + w / 2, b.ymin + h / 2, b.zmin + d / 2);
     return box;
-  }, [bounds]);
+  }, [b, mode]);
 
   useEffect(() => {
     return () => {
@@ -185,27 +137,23 @@ function CubeLatticeGrid({
   }, [edgesGeo]);
 
   const { majorPositions, minorPositions } = useMemo(() => {
-    if (!bounds) return { majorPositions: null, minorPositions: null };
-    if (mode === "off" || mode === "box") return { majorPositions: null, minorPositions: null };
+    if (!b || mode === "off" || mode === "box") return { majorPositions: null, minorPositions: null };
 
-    const { xmin, xmax, ymin, ymax, zmin, zmax } = bounds;
+    const { coords: xs, step: majorStepNorm } = buildCoords(b.xmin, b.xmax, gridStep, 50);
+    const { coords: ys } = buildCoords(b.ymin, b.ymax, gridStep, 50);
+    const { coords: zs } = buildCoords(b.zmin, b.zmax, gridStep, 50);
 
-    const { coords: xs, step: majorStepNorm } = buildCoords(xmin, xmax, gridStep, 50);
-    const { coords: ys } = buildCoords(ymin, ymax, gridStep, 50);
-    const { coords: zs } = buildCoords(zmin, zmax, gridStep, 50);
-
-    const major = buildCuboidLatticePositions(xs, ys, zs, xmin, xmax, ymin, ymax, zmin, zmax);
+    const major = buildLatticePositions(xs, ys, zs, b.xmin, b.xmax, b.ymin, b.ymax, b.zmin, b.zmax);
 
     if (mode !== "full") return { majorPositions: major, minorPositions: null };
 
     const div = Math.max(2, Math.floor(Number(minorDiv) || 4));
     const minorStep = Math.max(0.1, majorStepNorm / div);
 
-    const { coords: xs2 } = buildCoords(xmin, xmax, minorStep, 60);
-    const { coords: ys2 } = buildCoords(ymin, ymax, minorStep, 60);
-    const { coords: zs2 } = buildCoords(zmin, zmax, minorStep, 60);
+    const { coords: xs2 } = buildCoords(b.xmin, b.xmax, minorStep, 60);
+    const { coords: ys2 } = buildCoords(b.ymin, b.ymax, minorStep, 60);
+    const { coords: zs2 } = buildCoords(b.zmin, b.zmax, minorStep, 60);
 
-    // minor 중 major와 거의 겹치는 좌표는 제거(선 두께 과도 방지)
     const eps = 1e-5;
     const filterNotOnMajor = (arr, baseStep) =>
       arr.filter((v) => {
@@ -217,12 +165,12 @@ function CubeLatticeGrid({
     const ysMinor = filterNotOnMajor(ys2, majorStepNorm);
     const zsMinor = filterNotOnMajor(zs2, majorStepNorm);
 
-    const minor = buildCuboidLatticePositions(xsMinor, ysMinor, zsMinor, xmin, xmax, ymin, ymax, zmin, zmax);
+    const minor = buildLatticePositions(xsMinor, ysMinor, zsMinor, b.xmin, b.xmax, b.ymin, b.ymax, b.zmin, b.zmax);
 
     return { majorPositions: major, minorPositions: minor };
-  }, [bounds, mode, gridStep, minorDiv]);
+  }, [b, mode, gridStep, minorDiv]);
 
-  if (mode === "off") return null;
+  if (mode === "off" || !b) return null;
 
   return (
     <group>
@@ -234,7 +182,7 @@ function CubeLatticeGrid({
         </lineSegments>
       )}
 
-      {/* 내부 메이저 */}
+      {/* 내부 메이저 격자 */}
       {majorPositions && (
         <lineSegments>
           <bufferGeometry>
@@ -249,7 +197,7 @@ function CubeLatticeGrid({
         </lineSegments>
       )}
 
-      {/* 내부 마이너 */}
+      {/* 내부 마이너 격자 */}
       {minorPositions && (
         <lineSegments>
           <bufferGeometry>
@@ -267,119 +215,18 @@ function CubeLatticeGrid({
   );
 }
 
-function SurfaceMesh({ expr, xMin, xMax, yMin, yMax, nx, ny, onZRange }) {
-  const { geometry, zMin, zMax } = useMemo(() => {
-    const f = makeScalarFn(expr);
-
-    const gx = Math.max(8, nx | 0);
-    const gy = Math.max(8, ny | 0);
-
-    const positions = new Float32Array(gx * gy * 3);
-    const colors = new Float32Array(gx * gy * 3);
-    const indices = [];
-
-    const dx = (xMax - xMin) / (gx - 1);
-    const dy = (yMax - yMin) / (gy - 1);
-
-    let minZ = Infinity;
-    let maxZ = -Infinity;
-
-    // 위치/높이 계산
-    for (let j = 0; j < gy; j++) {
-      const y = yMin + dy * j;
-      for (let i = 0; i < gx; i++) {
-        const x = xMin + dx * i;
-        const z = f(x, y);
-
-        const idx = j * gx + i;
-        const o = idx * 3;
-
-        // world: (x, z=f(x,y), y)
-        positions[o + 0] = x;
-        positions[o + 1] = z;
-        positions[o + 2] = y;
-
-        if (z < minZ) minZ = z;
-        if (z > maxZ) maxZ = z;
-      }
-    }
-
-    if (!Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
-      minZ = -5;
-      maxZ = 5;
-    }
-
-    const span = maxZ - minZ || 1;
-    const color = new THREE.Color();
-
-    // 색상(높이 기반 그라데이션)
-    for (let j = 0; j < gy; j++) {
-      for (let i = 0; i < gx; i++) {
-        const idx = j * gx + i;
-        const o = idx * 3;
-        const z = positions[o + 1];
-        const t = (z - minZ) / span; // 0~1
-        color.setHSL(0.7 - 0.5 * t, 0.8, 0.5 + 0.15 * t);
-        colors[o + 0] = color.r;
-        colors[o + 1] = color.g;
-        colors[o + 2] = color.b;
-      }
-    }
-
-    // 인덱스 (두 삼각형으로 한 사각형 구성)
-    for (let j = 0; j < gy - 1; j++) {
-      for (let i = 0; i < gx - 1; i++) {
-        const a = j * gx + i;
-        const b = j * gx + (i + 1);
-        const c = (j + 1) * gx + i;
-        const d = (j + 1) * gx + (i + 1);
-        indices.push(a, c, b, b, c, d);
-      }
-    }
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-    geometry.setIndex(indices);
-    geometry.computeVertexNormals();
-
-    return { geometry, zMin: minZ, zMax: maxZ };
-  }, [expr, xMin, xMax, yMin, yMax, nx, ny]);
-
-  useEffect(() => {
-    try {
-      onZRange?.(zMin, zMax);
-    } catch {}
-  }, [zMin, zMax, onZRange]);
-
-  useEffect(() => {
-    return () => {
-      try {
-        geometry.dispose();
-      } catch {}
-    };
-  }, [geometry]);
-
-  return (
-    <mesh geometry={geometry}>
-      <meshStandardMaterial vertexColors roughness={0.6} metalness={0.05} side={THREE.DoubleSide} />
-    </mesh>
-  );
-}
-
 /** surface 위 특정 좌표를 노드로 표시
  * markers: { x, y, z?, label? }[]
- * z가 없으면 z = f(x, y)로 계산
+ * - z가 없으면 z = f(x, y)로 계산
+ * - WORLD 좌표는 (x, z=f(x,y), y)
  */
-function SurfaceMarkers({ expr, markers = [] }) {
-  const f = useMemo(() => makeScalarFn(expr), [expr]);
-
+function SurfaceMarkers({ f, markers = [] }) {
   const pts = useMemo(() => {
     if (!markers || markers.length === 0) return [];
     return markers.map((m) => {
-      const x = m.x;
-      const y = m.y;
-      const z = m.z ?? f(x, y);
+      const x = Number(m.x ?? 0);
+      const y = Number(m.y ?? 0);
+      const z = Number.isFinite(Number(m.z)) ? Number(m.z) : f(x, y);
       return {
         x,
         y,
@@ -431,66 +278,140 @@ export default function Surface3DCanvas({
   gridStep = 1,
   minorDiv = 4,
 }) {
-  // z-range는 메쉬 생성과 함께 산출됨
-  const zRangeRef = useRef({ min: -5, max: 5 });
-  const [zRange, setZRange] = useState({ min: -5, max: 5 });
+  const f = useMemo(() => makeScalarFn(expr), [expr]);
 
-  const updateZRange = (minZ, maxZ) => {
-    const next = { min: minZ, max: maxZ };
-    zRangeRef.current = next;
-    setZRange(next);
-  };
+  const meshData = useMemo(() => {
+    const xmin = Number(xMin);
+    const xmax = Number(xMax);
+    const ymin = Number(yMin);
+    const ymax = Number(yMax);
+    const gx = Math.max(8, Number(nx) || 60);
+    const gy = Math.max(8, Number(ny) || 60);
 
-  // axes 크기는 세 축 범위 중 최대 기반
+    if (![xmin, xmax, ymin, ymax].every((v) => Number.isFinite(v))) {
+      const g = new THREE.BufferGeometry();
+      return { geometry: g, zMin: -5, zMax: 5, bounds: null };
+    }
+
+    const positions = new Float32Array(gx * gy * 3);
+    const colors = new Float32Array(gx * gy * 3);
+    const indices = [];
+
+    const dx = (xmax - xmin) / (gx - 1);
+    const dy = (ymax - ymin) / (gy - 1);
+
+    let zMin = Infinity;
+    let zMax = -Infinity;
+
+    for (let j = 0; j < gy; j++) {
+      const y = ymin + dy * j;
+      for (let i = 0; i < gx; i++) {
+        const x = xmin + dx * i;
+        const z = f(x, y);
+
+        const idx = j * gx + i;
+        const o = idx * 3;
+
+        positions[o + 0] = x;
+        positions[o + 1] = z; // world.y
+        positions[o + 2] = y; // world.z
+
+        if (z < zMin) zMin = z;
+        if (z > zMax) zMax = z;
+      }
+    }
+
+    if (!Number.isFinite(zMin) || !Number.isFinite(zMax)) {
+      zMin = -5;
+      zMax = 5;
+    }
+
+    // 너무 납작하면 두께 보정
+    if (Math.abs(zMax - zMin) < 1e-6) {
+      zMin -= 0.5;
+      zMax += 0.5;
+    }
+
+    const span = zMax - zMin || 1;
+    const c = new THREE.Color();
+    for (let j = 0; j < gy; j++) {
+      for (let i = 0; i < gx; i++) {
+        const idx = j * gx + i;
+        const o = idx * 3;
+        const z = positions[o + 1];
+        const t = (z - zMin) / span; // 0~1
+        c.setHSL(0.7 - 0.5 * t, 0.8, 0.5 + 0.15 * t);
+        colors[o + 0] = c.r;
+        colors[o + 1] = c.g;
+        colors[o + 2] = c.b;
+      }
+    }
+
+    for (let j = 0; j < gy - 1; j++) {
+      for (let i = 0; i < gx - 1; i++) {
+        const a = j * gx + i;
+        const b = j * gx + (i + 1);
+        const c0 = (j + 1) * gx + i;
+        const d = (j + 1) * gx + (i + 1);
+        indices.push(a, c0, b, b, c0, d);
+      }
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+
+    const bounds = {
+      xmin: Math.min(xmin, xmax),
+      xmax: Math.max(xmin, xmax),
+      ymin: zMin, // world.y bounds are z-range
+      ymax: zMax,
+      zmin: Math.min(ymin, ymax), // world.z bounds are input y-range
+      zmax: Math.max(ymin, ymax),
+    };
+
+    return { geometry, zMin, zMax, bounds };
+  }, [xMin, xMax, yMin, yMax, nx, ny, f]);
+
+  useEffect(() => {
+    return () => {
+      try {
+        meshData.geometry.dispose();
+      } catch {}
+    };
+  }, [meshData]);
+
   const axesSize = useMemo(() => {
-    const ok = [xMin, xMax, yMin, yMax].every((v) => Number.isFinite(Number(v)));
-    if (!ok) return 8;
-    const sx = Math.abs(Number(xMax) - Number(xMin));
-    const sz = Math.abs(Number(yMax) - Number(yMin));
-    const sy = Math.abs((zRange.max ?? 5) - (zRange.min ?? -5));
-    return Math.max(4, Math.min(40, Math.max(sx, sz, sy)));
-  }, [xMin, xMax, yMin, yMax, zRange]);
+    if (!meshData.bounds) return 8;
+    const sx = Math.abs(meshData.bounds.xmax - meshData.bounds.xmin);
+    const sy = Math.abs(meshData.bounds.ymax - meshData.bounds.ymin);
+    const sz = Math.abs(meshData.bounds.zmax - meshData.bounds.zmin);
+    return Math.max(4, Math.min(40, Math.max(sx, sy, sz)));
+  }, [meshData.bounds]);
 
   return (
     <div style={{ position: "relative", flex: 1, width: "100%", height: "100%", overflow: "hidden" }}>
       <Canvas
         camera={{ position: [6, 6, 6], fov: 45 }}
         style={{ width: "100%", height: "100%" }}
-        onCreated={({ gl }) => {
-          gl.setClearColor(new THREE.Color("#0f1115"), 1.0);
-        }}
+        onCreated={({ gl }) => gl.setClearColor(new THREE.Color("#0f1115"), 1.0)}
       >
         <ambientLight intensity={0.7} />
         <directionalLight position={[6, 10, 8]} intensity={0.9} />
 
-        {/* 축 */}
         <axesHelper args={[axesSize]} />
 
         {/* ✅ 정육면체(직육면체) 내부 라티스 격자 */}
-        <CubeLatticeGrid
-          xMin={xMin}
-          xMax={xMax}
-          yMin={yMin}
-          yMax={yMax}
-          zMin={zRange.min}
-          zMax={zRange.max}
-          gridMode={gridMode}
-          gridStep={gridStep}
-          minorDiv={minorDiv}
-        />
+        <CubeLatticeGrid bounds={meshData.bounds} gridMode={gridMode} gridStep={gridStep} minorDiv={minorDiv} />
 
-        <SurfaceMesh
-          expr={expr}
-          xMin={xMin}
-          xMax={xMax}
-          yMin={yMin}
-          yMax={yMax}
-          nx={nx}
-          ny={ny}
-          onZRange={updateZRange}
-        />
+        {/* Surface mesh */}
+        <mesh geometry={meshData.geometry}>
+          <meshStandardMaterial vertexColors roughness={0.6} metalness={0.05} side={THREE.DoubleSide} />
+        </mesh>
 
-        <SurfaceMarkers expr={expr} markers={markers} />
+        <SurfaceMarkers f={f} markers={markers} />
 
         <OrbitControls makeDefault />
       </Canvas>
