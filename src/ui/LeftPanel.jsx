@@ -439,6 +439,59 @@ export default function LeftPanel({
   const [q, setQ] = useState("");
   const [tag, setTag] = useState("all");
   const [showQuick, setShowQuick] = useState(false);
+  // panel width / collapse state for drag-to-open/close
+  const [panelWidth, setPanelWidth] = useState(() => {
+    try {
+      const v = parseInt(localStorage.getItem("gm_leftPanelWidth"), 10);
+      return Number.isFinite(v) && v > 0 ? v : 280;
+    } catch {
+      return 280;
+    }
+  });
+  const [collapsed, setCollapsed] = useState(false);
+  const draggingRef = useRef(false);
+  const startXRef = useRef(0);
+  const startWRef = useRef(panelWidth);
+  const widthRef = useRef(panelWidth);
+
+  useEffect(() => {
+    widthRef.current = panelWidth;
+    if (!draggingRef.current) {
+      try {
+        localStorage.setItem("gm_leftPanelWidth", String(panelWidth));
+      } catch {}
+    }
+  }, [panelWidth]);
+
+  useEffect(() => {
+    function onMove(e) {
+      if (!draggingRef.current) return;
+      const dx = e.clientX - startXRef.current;
+      const newW = Math.max(36, startWRef.current + dx);
+      setPanelWidth(newW);
+      setCollapsed(newW < 60);
+    }
+    function onUp() {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      try {
+        localStorage.setItem("gm_leftPanelWidth", String(widthRef.current));
+      } catch {}
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, []);
+
+  function handleResizerPointerDown(e) {
+    draggingRef.current = true;
+    startXRef.current = e.clientX;
+    startWRef.current = widthRef.current;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  }
 
   // 입력 소스: resources가 있으면 우선 사용, 없으면 equations만 사용
   const items = useMemo(() => {
@@ -540,8 +593,60 @@ export default function LeftPanel({
     console.warn("[LeftPanel] onOpenArray/onOpenResource 콜백이 없습니다.");
   };
 
+  const containerStyle = {
+    width: collapsed ? 36 : panelWidth,
+    minWidth: 36,
+    maxWidth: 1200,
+    position: "relative",
+    transition: draggingRef.current ? "none" : "width 120ms ease",
+  };
+
   return (
-    <aside className="left-panel explorer">
+    <aside className="left-panel explorer" style={containerStyle}>
+      {/* resizer (right edge) */}
+      <div
+        onPointerDown={handleResizerPointerDown}
+        style={{
+          position: "absolute",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: 8,
+          cursor: "col-resize",
+          zIndex: 30,
+        }}
+        aria-hidden="true"
+      />
+
+      {/* collapsed handle (when collapsed) - small visible bar to grab */}
+      {collapsed && (
+        <div
+          onPointerDown={handleResizerPointerDown}
+          style={{
+            position: "absolute",
+            top: "40%",
+            right: 0,
+            width: 12,
+            height: 48,
+            background: "rgba(60,70,90,0.6)",
+            borderTopLeftRadius: 4,
+            borderBottomLeftRadius: 4,
+            cursor: "col-resize",
+            zIndex: 31,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#c6d0f5",
+            fontSize: 12,
+          }}
+          title="Drag to open"
+        >
+          ◀
+        </div>
+      )}
+
+      {/* panel content - hide when fully collapsed */}
+      <div style={{ display: collapsed ? "none" : "block", height: "100%" }}>
       {/* Open / New */}
       <div className="section">
         <div className="label">Open Graph</div>
@@ -852,6 +957,7 @@ export default function LeftPanel({
 
       <div className="note">
         Tip: 상단 탭을 드래그해 오른쪽으로 떼면 VSCode처럼 화면이 분할돼요.
+      </div>
       </div>
     </aside>
   );
