@@ -5,6 +5,7 @@ import { create, all } from "mathjs";
 import LeftPanel from "../ui/LeftPanel";
 import Toolbar from "../ui/Toolbar";
 import Curve3DToolbar from "../ui/Curve3DToolbar";
+import Surface3DToolbar from "../ui/Surface3DToolbar";
 import GraphView from "../ui/GraphView";
 import Array3DView from "../ui/Array3DView";
 import Curve3DView from "../ui/Curve3DView";
@@ -527,6 +528,12 @@ export default function Studio() {
           yMax: location.state?.surface3d?.yMax ?? location.state?.yMax ?? 5,
           nx: location.state?.surface3d?.nx ?? location.state?.nx ?? 80,
           ny: location.state?.surface3d?.ny ?? location.state?.ny ?? 80,
+          gridMode:
+            location.state?.surface3d?.gridMode ?? location.state?.gridMode ?? "major",
+          gridStep:
+            location.state?.surface3d?.gridStep ?? location.state?.gridStep ?? 1,
+          minorDiv:
+            location.state?.surface3d?.minorDiv ?? location.state?.minorDiv ?? 4,
         }
       : undefined;
 
@@ -1118,7 +1125,18 @@ export default function Studio() {
         const nx = payload.nx ?? payload.samplesX ?? 80;
         const ny = payload.ny ?? payload.samplesY ?? 80;
 
-        surface3dInit = { expr, xMin, xMax, yMin, yMax, nx, ny };
+        surface3dInit = {
+          expr,
+          xMin,
+          xMax,
+          yMin,
+          yMax,
+          nx,
+          ny,
+          gridMode: payload.gridMode ?? "major",
+          gridStep: payload.gridStep ?? 1,
+          minorDiv: payload.minorDiv ?? 4,
+        };
       }
 
       const title =
@@ -1397,6 +1415,8 @@ export default function Studio() {
           yMax: surf.yMax,
           nx: surf.nx,
           ny: surf.ny,
+          gridMode: surf.gridMode,
+          gridStep: surf.gridStep,
         };
       }
       if (s.type === "array3d") {
@@ -1465,6 +1485,24 @@ export default function Studio() {
           ...st[tabId],
           curve3d: {
             ...(st[tabId]?.curve3d || {}),
+            ...patch,
+          },
+        },
+      }));
+    },
+    [setTabState]
+  );
+
+  // ✅ surface3d 상태 업데이트 (SSOT: Studio)
+  const updateSurface3D = useCallback(
+    (tabId, patch) => {
+      if (!tabId) return;
+      setTabState((st) => ({
+        ...st,
+        [tabId]: {
+          ...st[tabId],
+          surface3d: {
+            ...(st[tabId]?.surface3d || {}),
             ...patch,
           },
         },
@@ -1683,6 +1721,11 @@ export default function Studio() {
             showLeftPanel={showLeftPanel}
             onToggleLeftPanel={() => setShowLeftPanel((v) => !v)}
           />
+        ) : active && active.type === "surface3d" ? (
+          <Surface3DToolbar
+            surface3d={active.surface3d}
+            onChange={(patch) => updateSurface3D(activeId, patch)}
+          />
         ) : null}
 
         <div className={`vscode-split-root ${isSplit ? "is-split" : ""}`}>
@@ -1732,6 +1775,7 @@ export default function Studio() {
                     leftActive.vaultId ?? ""
                   }`}
                   surface3d={leftActive.surface3d}
+                  onChange={(patch) => updateSurface3D(leftActiveId, patch)}
                 />
               ) : (
                 <div className="empty-hint">왼쪽에 열린 탭이 없습니다.</div>
@@ -1802,6 +1846,7 @@ export default function Studio() {
                         rightActive.vaultId ?? ""
                       }`}
                       surface3d={rightActive.surface3d}
+                      onChange={(patch) => updateSurface3D(rightActiveId, patch)}
                     />
                   ) : (
                     <div className="empty-hint">

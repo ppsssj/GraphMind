@@ -1,18 +1,13 @@
 // src/ui/Curve3DCanvas.jsx
 import React, { useMemo, useRef, useEffect, useState } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
-import {
-  OrbitControls,
-  TransformControls,
-  Text,
-  useCursor,
-} from "@react-three/drei";
+import { OrbitControls, TransformControls, Text, useCursor } from "@react-three/drei";
 import * as THREE from "three";
 import { create, all } from "mathjs";
 
 const math = create(all, {});
 
-// 수식 문자열 → t를 받는 함수로 변환 (표시용 참조 곡선)
+// 수식 문자열 → t를 받는 함수로 변환
 function makeParamFn(expr, paramName = "t") {
   if (!expr) return () => 0;
 
@@ -38,33 +33,178 @@ function makeParamFn(expr, paramName = "t") {
   };
 }
 
-function Axes3D({ size = 6 }) {
+function Axes3D({ size = 6, gridMode = "major", gridStep = 1, minorDiv = 4 }) {
   return (
     <group>
       <axesHelper args={[size]} />
-      <gridHelper args={[size * 2, size * 2]} rotation={[Math.PI / 2, 0, 0]} />
+      <CubeGrid3D half={size} gridMode={gridMode} majorStep={gridStep} minorDiv={minorDiv} />
     </group>
   );
 }
 
-// TransformControls 기반 3D 마커 (축 드래그)
-function EditableMarker3D({
-  index,
-  position,
-  onChange,
-  setControlsBusy,
-  onDragEnd,
-}) {
+// ✅ 3D 큐브 격자(내부 라티스)
+// gridMode
+//  - off: 격자 표시 안 함
+//  - box: 외곽 박스만
+//  - major: 내부 메이저 격자만
+//  - full: 내부 메이저 + 마이너 격자
+function CubeGrid3D({ half = 6, gridMode = "major", majorStep = 1, minorDiv = 4 }) {
+  const mode = ["off", "box", "major", "full"].includes(String(gridMode)) ? String(gridMode) : "major";
+  const planeSize = half * 2;
+
+  const boxGeo = useMemo(() => new THREE.BoxGeometry(planeSize, planeSize, planeSize), [planeSize]);
+
+  useEffect(() => {
+    return () => {
+      try {
+        boxGeo.dispose();
+      } catch {}
+    };
+  }, [boxGeo]);
+
+  const buildCoords = (step, maxDivisions) => {
+    const s = Math.max(0.1, Number(step) || 1);
+    const coords = [];
+    for (let v = -half; v <= half + 1e-6; v += s) coords.push(v);
+    if (coords.length === 0 || Math.abs(coords[coords.length - 1] - half) > 1e-6) coords.push(half);
+
+    // 너무 촘촘하면 자동으로 divisions 제한
+    if (coords.length > maxDivisions + 1) {
+      const n = maxDivisions;
+      coords.length = 0;
+      for (let i = 0; i <= n; i++) coords.push(-half + (planeSize * i) / n);
+    }
+    return { coords, step: s };
+  };
+
+  const buildLatticePositions = (coords) => {
+    const n = coords.length;
+    const lineCount = 3 * n * n; // x-lines + y-lines + z-lines
+    const arr = new Float32Array(lineCount * 2 * 3);
+    let o = 0;
+
+    // 1) X 방향 라인: (y,z) 격자마다 x=-half~+half
+    for (let yi = 0; yi < n; yi++) {
+      for (let zi = 0; zi < n; zi++) {
+        const y = coords[yi];
+        const z = coords[zi];
+        arr[o++] = -half;
+        arr[o++] = y;
+        arr[o++] = z;
+        arr[o++] = half;
+        arr[o++] = y;
+        arr[o++] = z;
+      }
+    }
+
+    // 2) Y 방향 라인: (x,z) 격자마다 y=-half~+half
+    for (let xi = 0; xi < n; xi++) {
+      for (let zi = 0; zi < n; zi++) {
+        const x = coords[xi];
+        const z = coords[zi];
+        arr[o++] = x;
+        arr[o++] = -half;
+        arr[o++] = z;
+        arr[o++] = x;
+        arr[o++] = half;
+        arr[o++] = z;
+      }
+    }
+
+    // 3) Z 방향 라인: (x,y) 격자마다 z=-half~+half
+    for (let xi = 0; xi < n; xi++) {
+      for (let yi = 0; yi < n; yi++) {
+        const x = coords[xi];
+        const y = coords[yi];
+        arr[o++] = x;
+        arr[o++] = y;
+        arr[o++] = -half;
+        arr[o++] = x;
+        arr[o++] = y;
+        arr[o++] = half;
+      }
+    }
+
+    return arr;
+  };
+
+  const { majorPositions, minorPositions } = useMemo(() => {
+    if (mode === "off" || mode === "box") {
+      return { majorPositions: null, minorPositions: null };
+    }
+
+    const { coords: majorCoords, step: majorStepNorm } = buildCoords(majorStep, 60);
+    const majorPositions = buildLatticePositions(majorCoords);
+
+    if (mode !== "full") {
+      return { majorPositions, minorPositions: null };
+    }
+
+    const div = Math.max(2, Math.floor(Number(minorDiv) || 4));
+    const minorStep = Math.max(0.1, majorStepNorm / div);
+    const { coords: minorCoordsRaw } = buildCoords(minorStep, 70);
+
+    // minor 중 major와 겹치는 라인은 제외(두께 과도 방지)
+    const eps = 1e-5;
+    const minorCoords = minorCoordsRaw.filter((v) => {
+      const k = Math.round(v / majorStepNorm);
+      return Math.abs(v - k * majorStepNorm) > eps;
+    });
+
+    const minorPositions = buildLatticePositions(minorCoords);
+    return { majorPositions, minorPositions };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [half, planeSize, mode, majorStep, minorDiv]);
+
+  if (mode === "off") return null;
+
+  return (
+    <group>
+      {/* 외곽 큐브 와이어프레임 */}
+      <lineSegments>
+        <edgesGeometry args={[boxGeo]} />
+        <lineBasicMaterial color="#64748b" transparent opacity={0.25} depthWrite={false} />
+      </lineSegments>
+
+      {/* 내부 메이저 격자 */}
+      {majorPositions && (
+        <lineSegments>
+          <bufferGeometry>
+            <bufferAttribute
+              attach="attributes-position"
+              array={majorPositions}
+              count={majorPositions.length / 3}
+              itemSize={3}
+            />
+          </bufferGeometry>
+          <lineBasicMaterial color="#334155" transparent opacity={0.12} depthWrite={false} />
+        </lineSegments>
+      )}
+
+      {/* 내부 마이너 격자 (full 모드에서만) */}
+      {minorPositions && (
+        <lineSegments>
+          <bufferGeometry>
+            <bufferAttribute
+              attach="attributes-position"
+              array={minorPositions}
+              count={minorPositions.length / 3}
+              itemSize={3}
+            />
+          </bufferGeometry>
+          <lineBasicMaterial color="#334155" transparent opacity={0.04} depthWrite={false} />
+        </lineSegments>
+      )}
+    </group>
+  );
+}
+
+function EditableMarker3D({ index, position, onChange, setControlsBusy, onDragEnd }) {
   const tcRef = useRef();
 
-  // 상위에서 내려온 좌표와 TransformControls object 위치 동기화
   useEffect(() => {
     if (tcRef.current?.object) {
-      tcRef.current.object.position.set(
-        position.x,
-        position.y,
-        position.z ?? 0
-      );
+      tcRef.current.object.position.set(position.x, position.y, position.z ?? 0);
     }
   }, [position.x, position.y, position.z]);
 
@@ -75,27 +215,10 @@ function EditableMarker3D({
     const handleChange = () => {
       const obj = tc.object;
       if (!obj) return;
-      // 로그: TransformControls로 위치 변경 시
-      try {
-        // eslint-disable-next-line no-console
-        console.log("EditableMarker3D: change", index, {
-          x: obj.position.x,
-          y: obj.position.y,
-          z: obj.position.z,
-        });
-      } catch {}
-      onChange(index, {
-        x: obj.position.x,
-        y: obj.position.y,
-        z: obj.position.z,
-      });
+      onChange(index, { x: obj.position.x, y: obj.position.y, z: obj.position.z });
     };
 
     const handleDragging = (e) => {
-      try {
-        // eslint-disable-next-line no-console
-        console.log("EditableMarker3D: dragging-changed", index, !!e.value);
-      } catch {}
       setControlsBusy(!!e.value);
       if (!e.value) {
         try {
@@ -125,14 +248,7 @@ function EditableMarker3D({
   );
 }
 
-// 진짜 3D 공간에서 직접 드래그하는 마커
-function DraggableMarker3D({
-  index,
-  position,
-  onChange,
-  setControlsBusy,
-  onDragEnd,
-}) {
+function DraggableMarker3D({ index, position, onChange, setControlsBusy, onDragEnd }) {
   const { camera } = useThree();
   const dragPlane = useRef(new THREE.Plane());
   const hit = useRef(new THREE.Vector3());
@@ -148,16 +264,10 @@ function DraggableMarker3D({
     setControlsBusy(true);
     e.target.setPointerCapture?.(e.pointerId);
 
-    // 드래그 시작: 카메라 시선 방향 + 현재 포인트 위치로 평면 생성
-    try {
-      // eslint-disable-next-line no-console
-      console.log("DraggableMarker3D: pointerDown", index, position);
-    } catch {}
     const normal = new THREE.Vector3();
     camera.getWorldDirection(normal);
 
     const point = new THREE.Vector3(position.x, position.y, position.z ?? 0);
-
     dragPlane.current.setFromNormalAndCoplanarPoint(normal, point);
   };
 
@@ -171,10 +281,6 @@ function DraggableMarker3D({
       const z = hit.current.z;
 
       if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
-        try {
-          // eslint-disable-next-line no-console
-          console.log("DraggableMarker3D: pointerMove hit", index, { x, y, z });
-        } catch {}
         onChange(index, { x, y, z });
       }
     }
@@ -185,10 +291,6 @@ function DraggableMarker3D({
     setDragging(false);
     setControlsBusy(false);
     e.target.releasePointerCapture?.(e.pointerId);
-    try {
-      // eslint-disable-next-line no-console
-      console.log("DraggableMarker3D: endDrag", index);
-    } catch {}
     try {
       onDragEnd?.(index);
     } catch {}
@@ -237,30 +339,12 @@ function MarkerLabels3D({ position, label }) {
   );
 }
 
-// 마커들을 Catmull-Rom 스플라인으로 연결 → 이게 "노드를 따르는 그래프"
 function MarkerCurve({ markers }) {
   const points = useMemo(() => {
     if (!markers || markers.length < 2) return [];
-
-    try {
-      // eslint-disable-next-line no-console
-      console.log("MarkerCurve: building curve from markers", markers.length);
-    } catch {}
-
-    const pts = markers.map((m) => {
-      const x = m.x ?? 0;
-      const y = m.y ?? 0;
-      const z = m.z ?? 0;
-      return new THREE.Vector3(x, y, z);
-    });
-
+    const pts = markers.map((m) => new THREE.Vector3(m.x ?? 0, m.y ?? 0, m.z ?? 0));
     const curve = new THREE.CatmullRomCurve3(pts);
-    const ptsOut = curve.getPoints(220);
-    try {
-      // eslint-disable-next-line no-console
-      console.log("MarkerCurve: curve points length", ptsOut.length);
-    } catch {}
-    return ptsOut;
+    return curve.getPoints(220);
   }, [markers]);
 
   const positions = useMemo(() => {
@@ -271,43 +355,15 @@ function MarkerCurve({ markers }) {
       arr[i * 3 + 1] = p.y;
       arr[i * 3 + 2] = p.z;
     });
-    try {
-      // eslint-disable-next-line no-console
-      console.log("MarkerCurve: positions array created, length", arr.length);
-    } catch {}
     return arr;
   }, [points]);
-
-  const attrRef = useRef();
-
-  useEffect(() => {
-    if (!positions || !attrRef.current) return;
-    try {
-      // eslint-disable-next-line no-console
-      console.log("MarkerCurve: marking buffer attribute needsUpdate");
-    } catch {}
-    // three.js BufferAttribute needs its 'needsUpdate' flag set when the array changes
-    try {
-      attrRef.current.needsUpdate = true;
-      // also ensure count is correct
-      attrRef.current.count = positions.length / 3;
-    } catch (e) {
-      // ignore
-    }
-  }, [positions]);
 
   if (!positions) return null;
 
   return (
     <line>
       <bufferGeometry>
-        <bufferAttribute
-          ref={attrRef}
-          attach="attributes-position"
-          array={positions}
-          count={positions.length / 3}
-          itemSize={3}
-        />
+        <bufferAttribute attach="attributes-position" array={positions} count={positions.length / 3} itemSize={3} />
       </bufferGeometry>
       <lineBasicMaterial linewidth={2} color="#22c55e" />
     </line>
@@ -315,40 +371,40 @@ function MarkerCurve({ markers }) {
 }
 
 export default function Curve3DCanvas({
-  // 🔹 원본(고정) 수식
   baseXExpr,
   baseYExpr,
   baseZExpr,
-  // 🔹 편집용(노드 기반) 수식
   xExpr,
   yExpr,
   zExpr,
   tMin = -2,
   tMax = 2,
   samples = 200,
+
+  // Grid
+  gridMode = "major", // "off" | "box" | "major" | "full"
+  gridStep = 1, // major step
+  minorDiv = 4, // full mode: minorStep = gridStep / minorDiv
+
   markers = [],
   onMarkerChange,
   onRecalculateExpressions,
   editMode = "drag", // "drag" | "arrows"
 }) {
-  // ✅ 원본 수식(없으면 편집 수식으로 fallback)
   const refXExpr = baseXExpr ?? xExpr;
   const refYExpr = baseYExpr ?? yExpr;
   const refZExpr = baseZExpr ?? zExpr;
 
-  // 🔹 원본 그래프용 함수
   const xtRef = useMemo(() => makeParamFn(refXExpr, "t"), [refXExpr]);
   const ytRef = useMemo(() => makeParamFn(refYExpr, "t"), [refYExpr]);
   const ztRef = useMemo(() => makeParamFn(refZExpr, "t"), [refZExpr]);
 
-  // 🔹 편집 그래프용 함수 (노드 + Lagrange로 계속 바뀌는 쪽)
   const xt = useMemo(() => makeParamFn(xExpr, "t"), [xExpr]);
   const yt = useMemo(() => makeParamFn(yExpr, "t"), [yExpr]);
   const zt = useMemo(() => makeParamFn(zExpr, "t"), [zExpr]);
 
-  // 🔹 원본 수식 곡선 (회색, 고정)
-  const basePoints = useMemo(() => {
-    if (!refXExpr || !refYExpr || !refZExpr || samples < 2) return [];
+  const basePositions = useMemo(() => {
+    if (!refXExpr || !refYExpr || !refZExpr || samples < 2) return null;
     const pts = [];
     const step = (tMax - tMin) / (samples - 1 || 1);
     for (let i = 0; i < samples; i++) {
@@ -357,25 +413,14 @@ export default function Curve3DCanvas({
       const y = ytRef(t);
       const z = ztRef(t);
       if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
-        pts.push(new THREE.Vector3(x, y, z));
+        pts.push(x, y, z);
       }
     }
-    return pts;
+    return pts.length ? new Float32Array(pts) : null;
   }, [refXExpr, refYExpr, refZExpr, samples, tMin, tMax, xtRef, ytRef, ztRef]);
 
-  const basePositions = useMemo(() => {
-    if (!basePoints || basePoints.length === 0) return null;
-    const arr = new Float32Array(basePoints.length * 3);
-    basePoints.forEach((p, i) => {
-      arr[i * 3 + 0] = p.x;
-      arr[i * 3 + 1] = p.y;
-      arr[i * 3 + 2] = p.z;
-    });
-    return arr;
-  }, [basePoints]);
-
-  const exprPoints = useMemo(() => {
-    if (!xExpr || !yExpr || !zExpr || samples < 2) return [];
+  const exprPositions = useMemo(() => {
+    if (!xExpr || !yExpr || !zExpr || samples < 2) return null;
     const pts = [];
     const step = (tMax - tMin) / (samples - 1 || 1);
     for (let i = 0; i < samples; i++) {
@@ -384,36 +429,20 @@ export default function Curve3DCanvas({
       const y = yt(t);
       const z = zt(t);
       if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
-        pts.push(new THREE.Vector3(x, y, z));
+        pts.push(x, y, z);
       }
     }
-    return pts;
+    return pts.length ? new Float32Array(pts) : null;
   }, [xExpr, yExpr, zExpr, tMin, tMax, samples, xt, yt, zt]);
 
-  const exprPositions = useMemo(() => {
-    if (!exprPoints || exprPoints.length === 0) return null;
-    const arr = new Float32Array(exprPoints.length * 3);
-    exprPoints.forEach((p, i) => {
-      arr[i * 3 + 0] = p.x;
-      arr[i * 3 + 1] = p.y;
-      arr[i * 3 + 2] = p.z;
-    });
-    return arr;
-  }, [exprPoints]);
-
-  // t 기반 마커 → 표시용 좌표 보정 (처음 한 번만 수식 위에 올려두는 느낌)
   const displayMarkers = useMemo(() => {
     if (!markers || markers.length === 0) return [];
-
     return markers.map((m) => {
       let x = Number.isFinite(m.x) ? m.x : undefined;
       let y = Number.isFinite(m.y) ? m.y : undefined;
       let z = Number.isFinite(m.z) ? m.z : undefined;
 
-      if (
-        (x === undefined || y === undefined || z === undefined) &&
-        typeof m.t === "number"
-      ) {
+      if ((x === undefined || y === undefined || z === undefined) && typeof m.t === "number") {
         const tx = xt(m.t);
         const ty = yt(m.t);
         const tz = zt(m.t);
@@ -422,35 +451,22 @@ export default function Curve3DCanvas({
         z = z ?? (Number.isFinite(tz) ? tz : 0);
       }
 
-      return {
-        ...m,
-        x: x ?? 0,
-        y: y ?? 0,
-        z: z ?? 0,
-      };
+      return { ...m, x: x ?? 0, y: y ?? 0, z: z ?? 0 };
     });
   }, [markers, xt, yt, zt]);
 
   const [controlsBusy, setControlsBusy] = useState(false);
 
   const handleMarkerChange = (index, pos) => {
-    if (!onMarkerChange) return;
-    try {
-      // eslint-disable-next-line no-console
-      console.debug("Curve3DCanvas: handleMarkerChange", index, pos);
-    } catch {}
-    onMarkerChange(index, pos); // 상위(Curve3DView)로 전달
+    onMarkerChange?.(index, pos);
   };
 
-  // 마커 드래그 종료 콜백 (상위 상태가 갱신된 직후에 재계산을 시도)
-  const handleMarkerDragEnd = (index) => {
-    // 부모가 setState로 markers를 갱신한 후에 계산하려면 이벤트 루프 한 사이클 뒤에 실행
+  const handleMarkerDragEnd = () => {
+    // t 기반 마커가 2개 이상일 때만 보간식 갱신
     setTimeout(() => {
       try {
         const tPoints = (markers || []).filter((m) => typeof m.t === "number");
-        if (tPoints.length < 2) {
-          return; 
-        }
+        if (tPoints.length < 2) return;
 
         const buildLagrange = (pts) => {
           const terms = pts.map((pi, i) => {
@@ -476,23 +492,8 @@ export default function Curve3DCanvas({
         const newYExpr = buildLagrange(ys);
         const newZExpr = buildLagrange(zs);
 
-        // eslint-disable-next-line no-console
-        console.log("Curve3DCanvas: recalculated expressions (on drag end)", {
-          newXExpr,
-          newYExpr,
-          newZExpr,
-        });
-
-        if (typeof onRecalculateExpressions === "function") {
-          onRecalculateExpressions({
-            xExpr: newXExpr,
-            yExpr: newYExpr,
-            zExpr: newZExpr,
-          });
-        }
-      } catch (e) {
-        // ignore
-      }
+        onRecalculateExpressions?.({ xExpr: newXExpr, yExpr: newYExpr, zExpr: newZExpr });
+      } catch {}
     }, 0);
   };
 
@@ -512,59 +513,35 @@ export default function Curve3DCanvas({
       <Canvas
         camera={{ position: [6, 6, 6], fov: 50 }}
         style={{ width: "100%", height: "100%" }}
-        onCreated={({ gl }) => {
-          gl.setClearColor(new THREE.Color("#020617"), 1.0);
-        }}
+        onCreated={({ gl }) => gl.setClearColor(new THREE.Color("#020617"), 1.0)}
       >
         <ambientLight intensity={0.7} />
-        <directionalLight
-          position={[5, 8, 5]}
-          intensity={1.0}
-          color="#ffffff"
-        />
+        <directionalLight position={[5, 8, 5]} intensity={1.0} color="#ffffff" />
 
-        <Axes3D size={6} />
+        <Axes3D size={6} gridMode={gridMode} gridStep={gridStep} minorDiv={minorDiv} />
 
-        {/* (수식 기반) 초록색 선: 수식(xExpr,yExpr,zExpr)로 그려집니다. */}
-        {/* 🔹 원본 고정 수식 그래프 (회색) */}
         {basePositions && (
-          <line key={`base-${basePositions.length}`}>
+          <line>
             <bufferGeometry>
-              <bufferAttribute
-                attach="attributes-position"
-                count={basePositions.length / 3}
-                array={basePositions}
-                itemSize={3}
-              />
+              <bufferAttribute attach="attributes-position" count={basePositions.length / 3} array={basePositions} itemSize={3} />
             </bufferGeometry>
             <lineBasicMaterial linewidth={1.5} color="#6b7280" />
           </line>
         )}
 
-        {/* 🔹 편집용 수식 그래프 (초록색, 노드에 의해 변경) */}
         {exprPositions && (
-          <line key={`expr-${exprPositions.length}`}>
+          <line>
             <bufferGeometry>
-              <bufferAttribute
-                attach="attributes-position"
-                count={exprPositions.length / 3}
-                array={exprPositions}
-                itemSize={3}
-              />
+              <bufferAttribute attach="attributes-position" count={exprPositions.length / 3} array={exprPositions} itemSize={3} />
             </bufferGeometry>
             <lineBasicMaterial linewidth={2} color="#22c55e" />
           </line>
         )}
 
-        {/* ✅ 마커들을 Catmull-Rom으로 연결한 편집 곡선 (보조 색상) */}
         <MarkerCurve markers={displayMarkers} />
 
-        {/* ✅ 드래그/Transform 가능한 마커 + 라벨 */}
         {displayMarkers.map((m, idx) => {
-          const label =
-            m.label ??
-            `(${m.x.toFixed(2)}, ${m.y.toFixed(2)}, ${m.z.toFixed(2)})`;
-
+          const label = m.label ?? `(${m.x.toFixed(2)}, ${m.y.toFixed(2)}, ${m.z.toFixed(2)})`;
           const markerPosition = { x: m.x, y: m.y, z: m.z };
 
           return (
@@ -591,41 +568,8 @@ export default function Curve3DCanvas({
           );
         })}
 
-        <OrbitControls
-          enableDamping
-          dampingFactor={0.1}
-          enabled={!controlsBusy}
-          makeDefault
-        />
+        <OrbitControls enableDamping dampingFactor={0.1} enabled={!controlsBusy} makeDefault />
       </Canvas>
-
-      {/* 우측 상단 정보 패널 */}
-      <div
-        style={{
-          position: "absolute",
-          top: 12,
-          right: 12,
-          padding: "8px 10px",
-          borderRadius: 12,
-          fontSize: 11,
-          lineHeight: 1.4,
-          background:
-            "linear-gradient(135deg, rgba(15,23,42,0.96), rgba(15,23,42,0.9))",
-          border: "1px solid rgba(148, 163, 184, 0.35)",
-          color: "#e5e7eb",
-          maxWidth: "260px",
-        }}
-      >
-        <div style={{ marginBottom: 4, opacity: 0.9 }}>3D 곡선 편집</div>
-        <div style={{ opacity: 0.85 }}>
-          <div>x(t) = {xExpr || "—"}</div>
-          <div>y(t) = {yExpr || "—"}</div>
-          <div>z(t) = {zExpr || "—"}</div>
-        </div>
-        <div style={{ marginTop: 4, opacity: 0.8 }}>
-          t ∈ [{tMin}, {tMax}], samples: {samples}
-        </div>
-      </div>
     </div>
   );
 }
