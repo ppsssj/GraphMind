@@ -4,7 +4,7 @@ import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls, TransformControls, Text, useCursor } from "@react-three/drei";
 import * as THREE from "three";
 import { create, all } from "mathjs";
-
+import OrientationOverlay from "./OrientationOverlay.jsx";
 const math = create(all, {});
 
 // 수식 문자열 → t를 받는 함수로 변환
@@ -394,7 +394,7 @@ export default function Curve3DCanvas({
   const refXExpr = baseXExpr ?? xExpr;
   const refYExpr = baseYExpr ?? yExpr;
   const refZExpr = baseZExpr ?? zExpr;
-
+const controlsRef = useRef();
   const xtRef = useMemo(() => makeParamFn(refXExpr, "t"), [refXExpr]);
   const ytRef = useMemo(() => makeParamFn(refYExpr, "t"), [refYExpr]);
   const ztRef = useMemo(() => makeParamFn(refZExpr, "t"), [refZExpr]);
@@ -567,7 +567,10 @@ export default function Curve3DCanvas({
             </group>
           );
         })}
+        <OrbitControls ref={controlsRef} makeDefault />
 
+      {/* 방향 표시 + 각도 HUD */}
+      <OrientationOverlay controlsRef={controlsRef} />
         <OrbitControls enableDamping dampingFactor={0.1} enabled={!controlsBusy} makeDefault />
       </Canvas>
     </div>

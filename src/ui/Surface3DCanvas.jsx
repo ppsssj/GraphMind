@@ -1,10 +1,10 @@
 // src/ui/Surface3DCanvas.jsx
-import { useMemo, useEffect } from "react";
+import { useMemo, useEffect, useRef } from "react";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Text } from "@react-three/drei";
 import * as THREE from "three";
 import { create, all } from "mathjs";
-
+import OrientationOverlay from "./OrientationOverlay";
 const mathjs = create(all, {});
 
 // z = f(x,y) 수식을 (x,y) → z 함수로 변환
@@ -42,7 +42,9 @@ function CubeLatticeGrid({
   gridStep = 1,
   minorDiv = 4,
 }) {
-  const mode = ["off", "box", "major", "full"].includes(String(gridMode)) ? String(gridMode) : "major";
+  const mode = ["off", "box", "major", "full"].includes(String(gridMode))
+    ? String(gridMode)
+    : "major";
   const b = bounds;
 
   const buildCoords = (minV, maxV, step, maxDivisions) => {
@@ -52,7 +54,8 @@ function CubeLatticeGrid({
     const start = Math.ceil(minV / s) * s;
     for (let v = start; v <= maxV + 1e-6; v += s) coords.push(v);
 
-    if (coords.length === 0 || Math.abs(coords[0] - minV) > 1e-6) coords.unshift(minV);
+    if (coords.length === 0 || Math.abs(coords[0] - minV) > 1e-6)
+      coords.unshift(minV);
     if (Math.abs(coords[coords.length - 1] - maxV) > 1e-6) coords.push(maxV);
 
     if (coords.length > maxDivisions + 1) {
@@ -63,7 +66,17 @@ function CubeLatticeGrid({
     return { coords, step: s };
   };
 
-  const buildLatticePositions = (xs, ys, zs, xmin, xmax, ymin, ymax, zmin, zmax) => {
+  const buildLatticePositions = (
+    xs,
+    ys,
+    zs,
+    xmin,
+    xmax,
+    ymin,
+    ymax,
+    zmin,
+    zmax
+  ) => {
     const nx = xs.length;
     const ny = ys.length;
     const nz = zs.length;
@@ -123,7 +136,11 @@ function CubeLatticeGrid({
     const h = b.ymax - b.ymin;
     const d = b.zmax - b.zmin;
 
-    const box = new THREE.BoxGeometry(Math.max(1e-6, w), Math.max(1e-6, h), Math.max(1e-6, d));
+    const box = new THREE.BoxGeometry(
+      Math.max(1e-6, w),
+      Math.max(1e-6, h),
+      Math.max(1e-6, d)
+    );
     box.translate(b.xmin + w / 2, b.ymin + h / 2, b.zmin + d / 2);
     return box;
   }, [b, mode]);
@@ -137,13 +154,29 @@ function CubeLatticeGrid({
   }, [edgesGeo]);
 
   const { majorPositions, minorPositions } = useMemo(() => {
-    if (!b || mode === "off" || mode === "box") return { majorPositions: null, minorPositions: null };
+    if (!b || mode === "off" || mode === "box")
+      return { majorPositions: null, minorPositions: null };
 
-    const { coords: xs, step: majorStepNorm } = buildCoords(b.xmin, b.xmax, gridStep, 50);
+    const { coords: xs, step: majorStepNorm } = buildCoords(
+      b.xmin,
+      b.xmax,
+      gridStep,
+      50
+    );
     const { coords: ys } = buildCoords(b.ymin, b.ymax, gridStep, 50);
     const { coords: zs } = buildCoords(b.zmin, b.zmax, gridStep, 50);
 
-    const major = buildLatticePositions(xs, ys, zs, b.xmin, b.xmax, b.ymin, b.ymax, b.zmin, b.zmax);
+    const major = buildLatticePositions(
+      xs,
+      ys,
+      zs,
+      b.xmin,
+      b.xmax,
+      b.ymin,
+      b.ymax,
+      b.zmin,
+      b.zmax
+    );
 
     if (mode !== "full") return { majorPositions: major, minorPositions: null };
 
@@ -165,7 +198,17 @@ function CubeLatticeGrid({
     const ysMinor = filterNotOnMajor(ys2, majorStepNorm);
     const zsMinor = filterNotOnMajor(zs2, majorStepNorm);
 
-    const minor = buildLatticePositions(xsMinor, ysMinor, zsMinor, b.xmin, b.xmax, b.ymin, b.ymax, b.zmin, b.zmax);
+    const minor = buildLatticePositions(
+      xsMinor,
+      ysMinor,
+      zsMinor,
+      b.xmin,
+      b.xmax,
+      b.ymin,
+      b.ymax,
+      b.zmin,
+      b.zmax
+    );
 
     return { majorPositions: major, minorPositions: minor };
   }, [b, mode, gridStep, minorDiv]);
@@ -178,7 +221,12 @@ function CubeLatticeGrid({
       {edgesGeo && (
         <lineSegments>
           <edgesGeometry args={[edgesGeo]} />
-          <lineBasicMaterial color="#64748b" transparent opacity={0.25} depthWrite={false} />
+          <lineBasicMaterial
+            color="#64748b"
+            transparent
+            opacity={0.25}
+            depthWrite={false}
+          />
         </lineSegments>
       )}
 
@@ -193,7 +241,12 @@ function CubeLatticeGrid({
               itemSize={3}
             />
           </bufferGeometry>
-          <lineBasicMaterial color="#334155" transparent opacity={0.12} depthWrite={false} />
+          <lineBasicMaterial
+            color="#334155"
+            transparent
+            opacity={0.12}
+            depthWrite={false}
+          />
         </lineSegments>
       )}
 
@@ -208,7 +261,12 @@ function CubeLatticeGrid({
               itemSize={3}
             />
           </bufferGeometry>
-          <lineBasicMaterial color="#334155" transparent opacity={0.04} depthWrite={false} />
+          <lineBasicMaterial
+            color="#334155"
+            transparent
+            opacity={0.04}
+            depthWrite={false}
+          />
         </lineSegments>
       )}
     </group>
@@ -279,7 +337,7 @@ export default function Surface3DCanvas({
   minorDiv = 4,
 }) {
   const f = useMemo(() => makeScalarFn(expr), [expr]);
-
+  const controlsRef = useRef();
   const meshData = useMemo(() => {
     const xmin = Number(xMin);
     const xmax = Number(xMax);
@@ -392,11 +450,21 @@ export default function Surface3DCanvas({
   }, [meshData.bounds]);
 
   return (
-    <div style={{ position: "relative", flex: 1, width: "100%", height: "100%", overflow: "hidden" }}>
+    <div
+      style={{
+        position: "relative",
+        flex: 1,
+        width: "100%",
+        height: "100%",
+        overflow: "hidden",
+      }}
+    >
       <Canvas
         camera={{ position: [6, 6, 6], fov: 45 }}
         style={{ width: "100%", height: "100%" }}
-        onCreated={({ gl }) => gl.setClearColor(new THREE.Color("#0f1115"), 1.0)}
+        onCreated={({ gl }) =>
+          gl.setClearColor(new THREE.Color("#0f1115"), 1.0)
+        }
       >
         <ambientLight intensity={0.7} />
         <directionalLight position={[6, 10, 8]} intensity={0.9} />
@@ -404,16 +472,30 @@ export default function Surface3DCanvas({
         <axesHelper args={[axesSize]} />
 
         {/* ✅ 정육면체(직육면체) 내부 라티스 격자 */}
-        <CubeLatticeGrid bounds={meshData.bounds} gridMode={gridMode} gridStep={gridStep} minorDiv={minorDiv} />
+        <CubeLatticeGrid
+          bounds={meshData.bounds}
+          gridMode={gridMode}
+          gridStep={gridStep}
+          minorDiv={minorDiv}
+        />
 
         {/* Surface mesh */}
         <mesh geometry={meshData.geometry}>
-          <meshStandardMaterial vertexColors roughness={0.6} metalness={0.05} side={THREE.DoubleSide} />
+          <meshStandardMaterial
+            vertexColors
+            roughness={0.6}
+            metalness={0.05}
+            side={THREE.DoubleSide}
+          />
         </mesh>
 
         <SurfaceMarkers f={f} markers={markers} />
 
         <OrbitControls makeDefault />
+        <OrbitControls ref={controlsRef} makeDefault />
+
+        {/* 방향 표시 + 각도 HUD */}
+        <OrientationOverlay controlsRef={controlsRef} />
       </Canvas>
 
       {/* 우상단 정보 오버레이 */}
@@ -431,7 +513,9 @@ export default function Surface3DCanvas({
           maxWidth: "260px",
         }}
       >
-        <div style={{ marginBottom: 4, opacity: 0.9 }}>3D 곡면 (z = f(x,y))</div>
+        <div style={{ marginBottom: 4, opacity: 0.9 }}>
+          3D 곡면 (z = f(x,y))
+        </div>
         <div>z = {expr}</div>
         <div style={{ marginTop: 4, opacity: 0.8 }}>
           x ∈ [{xMin}, {xMax}], y ∈ [{yMin}, {yMax}]
