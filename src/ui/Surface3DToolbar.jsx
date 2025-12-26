@@ -1,14 +1,15 @@
 // src/ui/Surface3DToolbar.jsx
 import { useEffect, useState } from "react";
 import "./Toolbar.css";
-import "./Curve3DToolbar.css"; // Curve3D와 동일한 레이아웃/톤 재사용
+import "./Curve3DToolbar.css";
 
-/**
- * ✅ Curve3DToolbar와 동일한 Grid UX를 Surface3D에도 적용
- * - Grid: off | box | major | full
- * - Step: major grid step (full 모드면 minorDiv로 minor step 자동 생성)
- */
-export default function Surface3DToolbar({ surface3d, onChange }) {
+function clampInt(v, lo, hi, fallback) {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(lo, Math.min(hi, n));
+}
+
+export default function Surface3DToolbar({ surface3d, onChange, onFit, onClearMarkers }) {
   const s = surface3d || {};
 
   const [expr, setExpr] = useState(s.expr ?? "sin(x) * cos(y)");
@@ -19,10 +20,12 @@ export default function Surface3DToolbar({ surface3d, onChange }) {
   const [nx, setNx] = useState(s.nx ?? 60);
   const [ny, setNy] = useState(s.ny ?? 60);
 
-  // Grid
   const [gridMode, setGridMode] = useState(s.gridMode ?? "major");
   const [gridStep, setGridStep] = useState(s.gridStep ?? 1);
-  const [minorDiv] = useState(s.minorDiv ?? 4); // UI는 간단히 유지
+  const [minorDiv, setMinorDiv] = useState(s.minorDiv ?? 4);
+
+  const [editMode, setEditMode] = useState(Boolean(s.editMode ?? true));
+  const [degree, setDegree] = useState(s.degree ?? 2);
 
   useEffect(() => {
     setExpr(s.expr ?? "sin(x) * cos(y)");
@@ -32,10 +35,28 @@ export default function Surface3DToolbar({ surface3d, onChange }) {
     setYMax(s.yMax ?? 5);
     setNx(s.nx ?? 60);
     setNy(s.ny ?? 60);
+
     setGridMode(s.gridMode ?? "major");
     setGridStep(s.gridStep ?? 1);
+    setMinorDiv(s.minorDiv ?? 4);
+
+    setEditMode(Boolean(s.editMode ?? true));
+    setDegree(s.degree ?? 2);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s.expr, s.xMin, s.xMax, s.yMin, s.yMax, s.nx, s.ny, s.gridMode, s.gridStep]);
+  }, [
+    s.expr,
+    s.xMin,
+    s.xMax,
+    s.yMin,
+    s.yMax,
+    s.nx,
+    s.ny,
+    s.gridMode,
+    s.gridStep,
+    s.minorDiv,
+    s.editMode,
+    s.degree,
+  ]);
 
   const commitGridMode = (value) => {
     const mode = String(value || "major");
@@ -49,6 +70,24 @@ export default function Surface3DToolbar({ surface3d, onChange }) {
     onChange?.({ gridStep: step });
   };
 
+  const commitMinorDiv = (value) => {
+    const div = clampInt(value, 2, 16, 4);
+    setMinorDiv(div);
+    onChange?.({ minorDiv: div });
+  };
+
+  const commitEditMode = (value) => {
+    const v = Boolean(value);
+    setEditMode(v);
+    onChange?.({ editMode: v });
+  };
+
+  const commitDegree = (value) => {
+    const d = clampInt(value, 1, 4, 2);
+    setDegree(d);
+    onChange?.({ degree: d });
+  };
+
   const apply = () => {
     const next = {
       expr: String(expr ?? "").trim() || "0",
@@ -60,7 +99,9 @@ export default function Surface3DToolbar({ surface3d, onChange }) {
       ny: Math.max(8, Number(ny) || 60),
       gridMode: String(gridMode || "major"),
       gridStep: Math.max(0.1, Number(gridStep) || 1),
-      minorDiv: Number(minorDiv) || 4,
+      minorDiv: clampInt(minorDiv, 2, 16, 4),
+      editMode: Boolean(editMode),
+      degree: clampInt(degree, 1, 4, 2),
     };
 
     if (![next.xMin, next.xMax, next.yMin, next.yMax].every((v) => Number.isFinite(v))) return;
@@ -70,7 +111,8 @@ export default function Surface3DToolbar({ surface3d, onChange }) {
   const resetGrid = () => {
     setGridMode("major");
     setGridStep(1);
-    onChange?.({ gridMode: "major", gridStep: 1 });
+    setMinorDiv(4);
+    onChange?.({ gridMode: "major", gridStep: 1, minorDiv: 4 });
   };
 
   return (
@@ -94,17 +136,14 @@ export default function Surface3DToolbar({ surface3d, onChange }) {
           <label className="toolbar-label">xMin</label>
           <input className="toolbar-input" value={xMin} onChange={(e) => setXMin(e.target.value)} />
         </div>
-
         <div className="curve3d-field curve3d-field-small">
           <label className="toolbar-label">xMax</label>
           <input className="toolbar-input" value={xMax} onChange={(e) => setXMax(e.target.value)} />
         </div>
-
         <div className="curve3d-field curve3d-field-small">
           <label className="toolbar-label">yMin</label>
           <input className="toolbar-input" value={yMin} onChange={(e) => setYMin(e.target.value)} />
         </div>
-
         <div className="curve3d-field curve3d-field-small">
           <label className="toolbar-label">yMax</label>
           <input className="toolbar-input" value={yMax} onChange={(e) => setYMax(e.target.value)} />
@@ -114,10 +153,27 @@ export default function Surface3DToolbar({ surface3d, onChange }) {
           <label className="toolbar-label">nx</label>
           <input className="toolbar-input" value={nx} onChange={(e) => setNx(e.target.value)} />
         </div>
-
         <div className="curve3d-field curve3d-field-small">
           <label className="toolbar-label">ny</label>
           <input className="toolbar-input" value={ny} onChange={(e) => setNy(e.target.value)} />
+        </div>
+
+        <div className="curve3d-field curve3d-field-small">
+          <label className="toolbar-label">Edit</label>
+          <select className="toolbar-input" value={editMode ? "on" : "off"} onChange={(e) => commitEditMode(e.target.value === "on")}>
+            <option value="on">On</option>
+            <option value="off">Off</option>
+          </select>
+        </div>
+
+        <div className="curve3d-field curve3d-field-small">
+          <label className="toolbar-label">Degree</label>
+          <select className="toolbar-input" value={degree} onChange={(e) => commitDegree(e.target.value)}>
+            <option value={1}>1</option>
+            <option value={2}>2</option>
+            <option value={3}>3</option>
+            <option value={4}>4</option>
+          </select>
         </div>
 
         <div className="curve3d-field curve3d-field-small">
@@ -144,12 +200,32 @@ export default function Surface3DToolbar({ surface3d, onChange }) {
           />
         </div>
 
+        <div className="curve3d-field curve3d-field-small">
+          <label className="toolbar-label">Minor</label>
+          <input
+            className="toolbar-input"
+            type="number"
+            min={2}
+            step={1}
+            value={minorDiv}
+            disabled={gridMode !== "full"}
+            onChange={(e) => setMinorDiv(e.target.value)}
+            onBlur={() => commitMinorDiv(minorDiv)}
+          />
+        </div>
+
         <div className="curve3d-toolbar-actions">
           <button className="toolbar-btn" onClick={apply}>
             Apply
           </button>
           <button className="toolbar-btn" onClick={resetGrid}>
             Reset Grid
+          </button>
+          <button className="toolbar-btn" onClick={onFit}>
+            Fit (Nodes → Expr)
+          </button>
+          <button className="toolbar-btn" onClick={onClearMarkers}>
+            Clear Nodes
           </button>
         </div>
       </div>
