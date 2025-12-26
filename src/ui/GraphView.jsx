@@ -11,6 +11,11 @@ export default function GraphView({
   ymax,
   gridStep,
   setGridStep,
+
+  // ✅ 추가: 격자 모드(Off/Box/Major/Full)
+  gridMode,
+  setGridMode,
+
   fittedFn,
   typedFn,
   curveKey,
@@ -25,7 +30,10 @@ export default function GraphView({
   showControls = true,
 }) {
   return (
-    <div className="graph-view" style={{ width: "100%", height: "100%", minHeight: 0 }}>
+    <div
+      className="graph-view"
+      style={{ width: "100%", height: "100%", minHeight: 0 }}
+    >
       <GraphCanvas
         points={points}
         onPointChange={updatePoint}
@@ -36,8 +44,13 @@ export default function GraphView({
         ymax={ymax}
         gridStep={gridStep}
         setGridStep={setGridStep}
-        fn={fittedFn}     // 파랑: 다항 근사
-        typedFn={typedFn} // 빨강: 입력 수식
+
+        // ✅ 추가 전달
+        gridMode={gridMode}
+        setGridMode={setGridMode}
+
+        fn={fittedFn}
+        typedFn={typedFn}
         curveKey={curveKey}
         markers={markers}
         ruleMode={ruleMode}

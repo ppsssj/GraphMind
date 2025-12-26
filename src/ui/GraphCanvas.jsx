@@ -12,6 +12,7 @@ import * as THREE from "three";
 import { HandInputProvider } from "../input/HandInputProvider";
 import { useInputPrefs } from "../store/useInputPrefs";
 import OrientationOverlay from "./OrientationOverlay";
+
 function CameraControlBridge({
   cameraApiRef,
   target = new THREE.Vector3(0, 0, 0),
@@ -68,38 +69,165 @@ function CameraControlBridge({
   return null;
 }
 
-function Axes({ xmin = -8, xmax = 8, ymin = -8, ymax = 8, gridStep = 1 }) {
+function buildLineSegments(segments) {
+  // segments: [[x1,y1,z1,x2,y2,z2], ...]
+  const arr = new Float32Array(segments.length * 6);
+  for (let i = 0; i < segments.length; i++) {
+    const o = i * 6;
+    const s = segments[i];
+    arr[o + 0] = s[0];
+    arr[o + 1] = s[1];
+    arr[o + 2] = s[2];
+    arr[o + 3] = s[3];
+    arr[o + 4] = s[4];
+    arr[o + 5] = s[5];
+  }
+  return arr;
+}
+
+function snapUp(v, step) {
+  if (!Number.isFinite(v) || !Number.isFinite(step) || step <= 0) return v;
+  return Math.ceil(v / step) * step;
+}
+
+function GridAndAxes({
+  xmin = -8,
+  xmax = 8,
+  ymin = -8,
+  ymax = 8,
+  gridStep = 1,
+  gridMode = "major", // off | box | major | full
+  majorEvery = 5,
+}) {
   const spanX = xmax - xmin;
   const spanY = ymax - ymin;
 
-  const sizeScale = 1.5; // 격자판 도메인 확장 배율
-  const span = Math.max(spanX, spanY);
-  const size = Math.max(1, span * sizeScale);
-
-  const divisions = Math.min(
-    200,
-    Math.max(1, Math.round(size / Math.max(0.1, gridStep)))
-  );
-
+  const sizeScale = 1.5;
   const cx = (xmin + xmax) / 2;
   const cy = (ymin + ymax) / 2;
 
+  const sizeX = Math.max(1, Math.abs(spanX) * sizeScale);
+  const sizeY = Math.max(1, Math.abs(spanY) * sizeScale);
+
+  const x0 = cx - sizeX / 2;
+  const x1 = cx + sizeX / 2;
+  const y0 = cy - sizeY / 2;
+  const y1 = cy + sizeY / 2;
+
+  const zGrid = 0.0;
   const zAxis = 0.01; // z-fighting 방지
   const axisThickness = 0.06;
 
-  return (
-    <group position={[cx, cy, 0]}>
-      <gridHelper args={[size, divisions]} rotation={[Math.PI / 2, 0, 0]} />
+  const step = Math.max(0.1, Number(gridStep) || 1);
+  const majorStep = step * Math.max(1, Number(majorEvery) || 5);
 
-      {/* x축: 격자판 size와 동일한 길이 */}
-      <mesh position={[0, 0, zAxis]}>
-        <boxGeometry args={[size, axisThickness, axisThickness]} />
+  const { minorPositions, majorPositions, boxPositions } = useMemo(() => {
+    // box(외곽선)
+    const boxSegs = [
+      [x0, y0, zGrid, x1, y0, zGrid],
+      [x1, y0, zGrid, x1, y1, zGrid],
+      [x1, y1, zGrid, x0, y1, zGrid],
+      [x0, y1, zGrid, x0, y0, zGrid],
+    ];
+
+    // major lines
+    const majorSegs = [];
+    const mxStart = snapUp(x0, majorStep);
+    const myStart = snapUp(y0, majorStep);
+
+    for (let x = mxStart; x <= x1 + 1e-9; x += majorStep) {
+      majorSegs.push([x, y0, zGrid, x, y1, zGrid]);
+    }
+    for (let y = myStart; y <= y1 + 1e-9; y += majorStep) {
+      majorSegs.push([x0, y, zGrid, x1, y, zGrid]);
+    }
+
+    // minor lines (full일 때만)
+    const minorSegs = [];
+    const sxStart = snapUp(x0, step);
+    const syStart = snapUp(y0, step);
+
+    for (let x = sxStart; x <= x1 + 1e-9; x += step) {
+      minorSegs.push([x, y0, zGrid, x, y1, zGrid]);
+    }
+    for (let y = syStart; y <= y1 + 1e-9; y += step) {
+      minorSegs.push([x0, y, zGrid, x1, y, zGrid]);
+    }
+
+    return {
+      minorPositions: buildLineSegments(minorSegs),
+      majorPositions: buildLineSegments(majorSegs),
+      boxPositions: buildLineSegments(boxSegs),
+    };
+  }, [x0, x1, y0, y1, step, majorStep]);
+
+  return (
+    <group>
+      {/* ✅ Grid */}
+      {gridMode === "box" && (
+        <lineSegments>
+          <bufferGeometry>
+            <bufferAttribute
+              attach="attributes-position"
+              array={boxPositions}
+              count={boxPositions.length / 3}
+              itemSize={3}
+            />
+          </bufferGeometry>
+          <lineBasicMaterial color="#7f8a9a" transparent opacity={0.55} />
+        </lineSegments>
+      )}
+
+      {gridMode === "major" && (
+        <lineSegments>
+          <bufferGeometry>
+            <bufferAttribute
+              attach="attributes-position"
+              array={majorPositions}
+              count={majorPositions.length / 3}
+              itemSize={3}
+            />
+          </bufferGeometry>
+          <lineBasicMaterial color="#7f8a9a" transparent opacity={0.45} />
+        </lineSegments>
+      )}
+
+      {gridMode === "full" && (
+        <group>
+          <lineSegments>
+            <bufferGeometry>
+              <bufferAttribute
+                attach="attributes-position"
+                array={minorPositions}
+                count={minorPositions.length / 3}
+                itemSize={3}
+              />
+            </bufferGeometry>
+            <lineBasicMaterial color="#7f8a9a" transparent opacity={0.18} />
+          </lineSegments>
+
+          <lineSegments>
+            <bufferGeometry>
+              <bufferAttribute
+                attach="attributes-position"
+                array={majorPositions}
+                count={majorPositions.length / 3}
+                itemSize={3}
+              />
+            </bufferGeometry>
+            <lineBasicMaterial color="#7f8a9a" transparent opacity={0.45} />
+          </lineSegments>
+        </group>
+      )}
+
+      {/* ✅ Axes (항상 유지) */}
+      <mesh position={[cx, cy, zAxis]}>
+        <boxGeometry args={[sizeX, axisThickness, axisThickness]} />
         <meshStandardMaterial color="#6039BC" />
       </mesh>
 
-      {/* y축: 격자판 size와 동일한 길이 */}
-      <mesh position={[0, 0, zAxis]}>
-        <boxGeometry args={[axisThickness, size, axisThickness]} />
+      <mesh position={[cx, cy, zAxis]}>
+        <boxGeometry args={[axisThickness, sizeY, axisThickness]} />
         <meshStandardMaterial color="#6039BC" />
       </mesh>
     </group>
@@ -309,10 +437,16 @@ export default function GraphCanvas({
   onPointCommit,
   xmin,
   xmax,
-  ymin, // ✅ 추가 (없으면 아래에서 xmin/xmax로 fallback)
-  ymax, // ✅ 추가
+  ymin,
+  ymax,
+
   gridStep,
   setGridStep,
+
+  // ✅ 추가: 격자 모드(외부에서 제어 가능)
+  gridMode,
+  setGridMode,
+
   fn,
   typedFn,
   curveKey,
@@ -332,22 +466,16 @@ export default function GraphCanvas({
   const [viewMode, setViewMode] = useState("both"); // typed | fit | both
   const [editMode, setEditMode] = useState("drag"); // arrows | drag
 
-  // ✅ 손 입력 상태는 "useEffect보다 위에서" 선언
   const handEnabled = useInputPrefs((s) => s.handControlEnabled);
 
-  // ✅ 아코디언 패널: 기본 OFF
   const [openPanel, setOpenPanel] = useState(null);
-  // openPanel: "rule" | "view" | "grid" | "edit" | "hand" | "gestures" | null
 
-  // ✅ 손 입력 켜면 gestures 자동 오픈(스테일/TDZ 없이 functional update만 사용)
   useEffect(() => {
-    if (handEnabled) {
-      setOpenPanel((p) => p ?? "gestures");
-    } else {
-      setOpenPanel((p) => (p === "gestures" ? null : p));
-    }
+    if (handEnabled) setOpenPanel((p) => p ?? "gestures");
+    else setOpenPanel((p) => (p === "gestures" ? null : p));
   }, [handEnabled]);
 
+  // grid step (기존)
   const [gridStepLocal, setGridStepLocal] = useState(gridStep ?? 1);
   useEffect(() => {
     if (gridStep !== undefined) setGridStepLocal(gridStep);
@@ -359,6 +487,20 @@ export default function GraphCanvas({
     const n = Math.max(0.1, Number(v) || 1);
     if (typeof setGridStep === "function") setGridStep(n);
     else setGridStepLocal(n);
+  };
+
+  // ✅ grid mode (추가)
+  const [gridModeLocal, setGridModeLocal] = useState(gridMode ?? "major");
+  useEffect(() => {
+    if (gridMode !== undefined) setGridModeLocal(gridMode);
+  }, [gridMode]);
+
+  const gridModeEff = (gridMode ?? gridModeLocal) || "major";
+
+  const setGridModeEff = (v) => {
+    const next = String(v || "major");
+    if (typeof setGridMode === "function") setGridMode(next);
+    else setGridModeLocal(next);
   };
 
   const showTyped = typedFn && (viewMode === "typed" || viewMode === "both");
@@ -381,7 +523,6 @@ export default function GraphCanvas({
         overflow: "hidden",
       }}
     >
-      {/* 손 입력(그래프 화면 전용) */}
       {handEnabled && (
         <HandInputProvider
           targetRef={wrapperRef}
@@ -405,12 +546,15 @@ export default function GraphCanvas({
         <ambientLight intensity={0.7} />
         <directionalLight position={[3, 5, 6]} intensity={0.9} />
 
-        <Axes
+        {/* ✅ gridMode 적용 */}
+        <GridAndAxes
           xmin={xmin}
           xmax={xmax}
           ymin={yMinEff}
           ymax={yMaxEff}
           gridStep={gridStepEff}
+          gridMode={gridModeEff}
+          majorEvery={5}
         />
 
         {showFit && (
@@ -432,7 +576,6 @@ export default function GraphCanvas({
           />
         )}
 
-        {/* AI markers (max/min/roots/...) */}
         {Array.isArray(markers) &&
           markers.map((m) => (
             <group key={m.id ?? `${m.kind}-${m.x}-${m.y}`}>
@@ -486,14 +629,14 @@ export default function GraphCanvas({
           )
         )}
 
-        <OrbitControls makeDefault enabled={!controlsBusy && !handEnabled} />
-        <OrbitControls ref={controlsRef} makeDefault />
-
-        {/* 방향 표시 + 각도 HUD */}
+        <OrbitControls
+          ref={controlsRef}
+          makeDefault
+          enabled={!controlsBusy && !handEnabled}
+        />
         <OrientationOverlay controlsRef={controlsRef} />
       </Canvas>
 
-      {/* UI: 아코디언(개별 토글) */}
       {showControls && (
         <div
           style={{
@@ -568,7 +711,6 @@ export default function GraphCanvas({
 
             return (
               <>
-                {/* 규칙 기반 편집 */}
                 <Panel id="rule" title="규칙 기반 편집">
                   <div
                     style={{ display: "flex", gap: 6, alignItems: "center" }}
@@ -590,11 +732,9 @@ export default function GraphCanvas({
                       <option value="free">자유(수식 고정)</option>
                       <option value="linear">선형: a·x + b</option>
                       <option value="poly">다항식: 차수 고정</option>
-
                       <option value="sin">사인: A·sin(ωx+φ)+C</option>
                       <option value="cos">코사인: A·cos(ωx+φ)+C</option>
                       <option value="tan">탄젠트: A·tan(ωx+φ)+C</option>
-
                       <option value="exp">지수: A·exp(kx)+C</option>
                       <option value="log">로그: A·log(kx)+C</option>
                       <option value="power">거듭제곱: A·x^p + C</option>
@@ -644,7 +784,6 @@ export default function GraphCanvas({
                   )}
                 </Panel>
 
-                {/* 보기 */}
                 <Panel id="view" title="보기">
                   <div style={{ display: "flex", gap: 6 }}>
                     <button
@@ -668,11 +807,42 @@ export default function GraphCanvas({
                   </div>
                 </Panel>
 
-                {/* 격자 간격 */}
-                <Panel id="grid" title="격자 간격">
+                {/* ✅ 격자: 모드 + 간격 */}
+                <Panel id="grid" title="Grid">
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 6,
+                      alignItems: "center",
+                      marginBottom: 8,
+                    }}
+                  >
+                    <label style={{ opacity: 0.75, width: 34 }}>Mode</label>
+                    <select
+                      value={gridModeEff}
+                      onChange={(e) => setGridModeEff(e.target.value)}
+                      style={{
+                        flex: 1,
+                        background: "rgba(10,10,10,0.85)",
+                        color: "#fff",
+                        border: "1px solid rgba(255,255,255,0.15)",
+                        borderRadius: 8,
+                        padding: "4px 6px",
+                        outline: "none",
+                        fontSize: 11,
+                      }}
+                    >
+                      <option value="off">Off</option>
+                      <option value="box">Box</option>
+                      <option value="major">Major</option>
+                      <option value="full">Full</option>
+                    </select>
+                  </div>
+
                   <div
                     style={{ display: "flex", gap: 6, alignItems: "center" }}
                   >
+                    <label style={{ opacity: 0.75, width: 34 }}>Step</label>
                     <input
                       type="number"
                       step="0.5"
@@ -688,29 +858,37 @@ export default function GraphCanvas({
                         color: "#fff",
                         outline: "none",
                       }}
+                      disabled={gridModeEff === "off" || gridModeEff === "box"}
+                      title={
+                        gridModeEff === "off" || gridModeEff === "box"
+                          ? "현재 모드에서는 Step이 적용되지 않습니다."
+                          : "격자 간격"
+                      }
                     />
                     <button
                       onClick={() => setGridStepEff(1)}
                       style={btnStyle(false, "#ffffff")}
+                      disabled={gridModeEff === "off" || gridModeEff === "box"}
                     >
                       1
                     </button>
                     <button
                       onClick={() => setGridStepEff(2)}
                       style={btnStyle(false, "#ffffff")}
+                      disabled={gridModeEff === "off" || gridModeEff === "box"}
                     >
                       2
                     </button>
                     <button
                       onClick={() => setGridStepEff(4)}
                       style={btnStyle(false, "#ffffff")}
+                      disabled={gridModeEff === "off" || gridModeEff === "box"}
                     >
                       4
                     </button>
                   </div>
                 </Panel>
 
-                {/* 편집 */}
                 <Panel id="edit" title="편집">
                   <div style={{ display: "flex", gap: 6 }}>
                     <button
@@ -728,7 +906,6 @@ export default function GraphCanvas({
                   </div>
                 </Panel>
 
-                {/* 손 입력 */}
                 <Panel id="hand" title="손 입력">
                   <HandToggle />
                   <div
@@ -738,13 +915,11 @@ export default function GraphCanvas({
                   </div>
                 </Panel>
 
-                {/* 손 제스처: 손 입력 켰을 때만 표시 */}
                 <Panel id="gestures" title="손 제스처" hidden={!handEnabled}>
                   <div style={{ opacity: 0.9, lineHeight: 1.45 }}>
                     • 오른손 핀치: 드래그
-                    <br />
-                    • 양손 핀치: 줌<br />
-                    • 왼손 펼침: 팬<br />• 오른손 주먹: 회전
+                    <br />• 양손 핀치: 줌<br />• 왼손 펼침: 팬<br />• 오른손
+                    주먹: 회전
                   </div>
                 </Panel>
               </>

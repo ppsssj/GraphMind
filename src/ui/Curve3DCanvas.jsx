@@ -1,7 +1,12 @@
 // src/ui/Curve3DCanvas.jsx
 import React, { useMemo, useRef, useEffect, useState } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
-import { OrbitControls, TransformControls, Text, useCursor } from "@react-three/drei";
+import {
+  OrbitControls,
+  TransformControls,
+  Text,
+  useCursor,
+} from "@react-three/drei";
 import * as THREE from "three";
 import { create, all } from "mathjs";
 import OrientationOverlay from "./OrientationOverlay.jsx";
@@ -37,7 +42,12 @@ function Axes3D({ size = 6, gridMode = "major", gridStep = 1, minorDiv = 4 }) {
   return (
     <group>
       <axesHelper args={[size]} />
-      <CubeGrid3D half={size} gridMode={gridMode} majorStep={gridStep} minorDiv={minorDiv} />
+      <CubeGrid3D
+        half={size}
+        gridMode={gridMode}
+        majorStep={gridStep}
+        minorDiv={minorDiv}
+      />
     </group>
   );
 }
@@ -48,11 +58,21 @@ function Axes3D({ size = 6, gridMode = "major", gridStep = 1, minorDiv = 4 }) {
 //  - box: 외곽 박스만
 //  - major: 내부 메이저 격자만
 //  - full: 내부 메이저 + 마이너 격자
-function CubeGrid3D({ half = 6, gridMode = "major", majorStep = 1, minorDiv = 4 }) {
-  const mode = ["off", "box", "major", "full"].includes(String(gridMode)) ? String(gridMode) : "major";
+function CubeGrid3D({
+  half = 6,
+  gridMode = "major",
+  majorStep = 1,
+  minorDiv = 4,
+}) {
+  const mode = ["off", "box", "major", "full"].includes(String(gridMode))
+    ? String(gridMode)
+    : "major";
   const planeSize = half * 2;
 
-  const boxGeo = useMemo(() => new THREE.BoxGeometry(planeSize, planeSize, planeSize), [planeSize]);
+  const boxGeo = useMemo(
+    () => new THREE.BoxGeometry(planeSize, planeSize, planeSize),
+    [planeSize]
+  );
 
   useEffect(() => {
     return () => {
@@ -66,7 +86,11 @@ function CubeGrid3D({ half = 6, gridMode = "major", majorStep = 1, minorDiv = 4 
     const s = Math.max(0.1, Number(step) || 1);
     const coords = [];
     for (let v = -half; v <= half + 1e-6; v += s) coords.push(v);
-    if (coords.length === 0 || Math.abs(coords[coords.length - 1] - half) > 1e-6) coords.push(half);
+    if (
+      coords.length === 0 ||
+      Math.abs(coords[coords.length - 1] - half) > 1e-6
+    )
+      coords.push(half);
 
     // 너무 촘촘하면 자동으로 divisions 제한
     if (coords.length > maxDivisions + 1) {
@@ -133,7 +157,10 @@ function CubeGrid3D({ half = 6, gridMode = "major", majorStep = 1, minorDiv = 4 
       return { majorPositions: null, minorPositions: null };
     }
 
-    const { coords: majorCoords, step: majorStepNorm } = buildCoords(majorStep, 60);
+    const { coords: majorCoords, step: majorStepNorm } = buildCoords(
+      majorStep,
+      60
+    );
     const majorPositions = buildLatticePositions(majorCoords);
 
     if (mode !== "full") {
@@ -163,7 +190,12 @@ function CubeGrid3D({ half = 6, gridMode = "major", majorStep = 1, minorDiv = 4 
       {/* 외곽 큐브 와이어프레임 */}
       <lineSegments>
         <edgesGeometry args={[boxGeo]} />
-        <lineBasicMaterial color="#64748b" transparent opacity={0.25} depthWrite={false} />
+        <lineBasicMaterial
+          color="#64748b"
+          transparent
+          opacity={0.25}
+          depthWrite={false}
+        />
       </lineSegments>
 
       {/* 내부 메이저 격자 */}
@@ -177,7 +209,12 @@ function CubeGrid3D({ half = 6, gridMode = "major", majorStep = 1, minorDiv = 4 
               itemSize={3}
             />
           </bufferGeometry>
-          <lineBasicMaterial color="#334155" transparent opacity={0.12} depthWrite={false} />
+          <lineBasicMaterial
+            color="#334155"
+            transparent
+            opacity={0.12}
+            depthWrite={false}
+          />
         </lineSegments>
       )}
 
@@ -192,19 +229,34 @@ function CubeGrid3D({ half = 6, gridMode = "major", majorStep = 1, minorDiv = 4 
               itemSize={3}
             />
           </bufferGeometry>
-          <lineBasicMaterial color="#334155" transparent opacity={0.04} depthWrite={false} />
+          <lineBasicMaterial
+            color="#334155"
+            transparent
+            opacity={0.04}
+            depthWrite={false}
+          />
         </lineSegments>
       )}
     </group>
   );
 }
 
-function EditableMarker3D({ index, position, onChange, setControlsBusy, onDragEnd }) {
+function EditableMarker3D({
+  index,
+  position,
+  onChange,
+  setControlsBusy,
+  onDragEnd,
+}) {
   const tcRef = useRef();
 
   useEffect(() => {
     if (tcRef.current?.object) {
-      tcRef.current.object.position.set(position.x, position.y, position.z ?? 0);
+      tcRef.current.object.position.set(
+        position.x,
+        position.y,
+        position.z ?? 0
+      );
     }
   }, [position.x, position.y, position.z]);
 
@@ -215,7 +267,11 @@ function EditableMarker3D({ index, position, onChange, setControlsBusy, onDragEn
     const handleChange = () => {
       const obj = tc.object;
       if (!obj) return;
-      onChange(index, { x: obj.position.x, y: obj.position.y, z: obj.position.z });
+      onChange(index, {
+        x: obj.position.x,
+        y: obj.position.y,
+        z: obj.position.z,
+      });
     };
 
     const handleDragging = (e) => {
@@ -248,7 +304,13 @@ function EditableMarker3D({ index, position, onChange, setControlsBusy, onDragEn
   );
 }
 
-function DraggableMarker3D({ index, position, onChange, setControlsBusy, onDragEnd }) {
+function DraggableMarker3D({
+  index,
+  position,
+  onChange,
+  setControlsBusy,
+  onDragEnd,
+}) {
   const { camera } = useThree();
   const dragPlane = useRef(new THREE.Plane());
   const hit = useRef(new THREE.Vector3());
@@ -342,7 +404,9 @@ function MarkerLabels3D({ position, label }) {
 function MarkerCurve({ markers }) {
   const points = useMemo(() => {
     if (!markers || markers.length < 2) return [];
-    const pts = markers.map((m) => new THREE.Vector3(m.x ?? 0, m.y ?? 0, m.z ?? 0));
+    const pts = markers.map(
+      (m) => new THREE.Vector3(m.x ?? 0, m.y ?? 0, m.z ?? 0)
+    );
     const curve = new THREE.CatmullRomCurve3(pts);
     return curve.getPoints(220);
   }, [markers]);
@@ -363,7 +427,12 @@ function MarkerCurve({ markers }) {
   return (
     <line>
       <bufferGeometry>
-        <bufferAttribute attach="attributes-position" array={positions} count={positions.length / 3} itemSize={3} />
+        <bufferAttribute
+          attach="attributes-position"
+          array={positions}
+          count={positions.length / 3}
+          itemSize={3}
+        />
       </bufferGeometry>
       <lineBasicMaterial linewidth={2} color="#22c55e" />
     </line>
@@ -394,7 +463,7 @@ export default function Curve3DCanvas({
   const refXExpr = baseXExpr ?? xExpr;
   const refYExpr = baseYExpr ?? yExpr;
   const refZExpr = baseZExpr ?? zExpr;
-const controlsRef = useRef();
+  const controlsRef = useRef();
   const xtRef = useMemo(() => makeParamFn(refXExpr, "t"), [refXExpr]);
   const ytRef = useMemo(() => makeParamFn(refYExpr, "t"), [refYExpr]);
   const ztRef = useMemo(() => makeParamFn(refZExpr, "t"), [refZExpr]);
@@ -442,7 +511,10 @@ const controlsRef = useRef();
       let y = Number.isFinite(m.y) ? m.y : undefined;
       let z = Number.isFinite(m.z) ? m.z : undefined;
 
-      if ((x === undefined || y === undefined || z === undefined) && typeof m.t === "number") {
+      if (
+        (x === undefined || y === undefined || z === undefined) &&
+        typeof m.t === "number"
+      ) {
         const tx = xt(m.t);
         const ty = yt(m.t);
         const tz = zt(m.t);
@@ -492,7 +564,11 @@ const controlsRef = useRef();
         const newYExpr = buildLagrange(ys);
         const newZExpr = buildLagrange(zs);
 
-        onRecalculateExpressions?.({ xExpr: newXExpr, yExpr: newYExpr, zExpr: newZExpr });
+        onRecalculateExpressions?.({
+          xExpr: newXExpr,
+          yExpr: newYExpr,
+          zExpr: newZExpr,
+        });
       } catch {}
     }, 0);
   };
@@ -513,17 +589,33 @@ const controlsRef = useRef();
       <Canvas
         camera={{ position: [6, 6, 6], fov: 50 }}
         style={{ width: "100%", height: "100%" }}
-        onCreated={({ gl }) => gl.setClearColor(new THREE.Color("#020617"), 1.0)}
+        onCreated={({ gl }) =>
+          gl.setClearColor(new THREE.Color("#020617"), 1.0)
+        }
       >
         <ambientLight intensity={0.7} />
-        <directionalLight position={[5, 8, 5]} intensity={1.0} color="#ffffff" />
+        <directionalLight
+          position={[5, 8, 5]}
+          intensity={1.0}
+          color="#ffffff"
+        />
 
-        <Axes3D size={6} gridMode={gridMode} gridStep={gridStep} minorDiv={minorDiv} />
+        <Axes3D
+          size={6}
+          gridMode={gridMode}
+          gridStep={gridStep}
+          minorDiv={minorDiv}
+        />
 
         {basePositions && (
           <line>
             <bufferGeometry>
-              <bufferAttribute attach="attributes-position" count={basePositions.length / 3} array={basePositions} itemSize={3} />
+              <bufferAttribute
+                attach="attributes-position"
+                count={basePositions.length / 3}
+                array={basePositions}
+                itemSize={3}
+              />
             </bufferGeometry>
             <lineBasicMaterial linewidth={1.5} color="#6b7280" />
           </line>
@@ -532,7 +624,12 @@ const controlsRef = useRef();
         {exprPositions && (
           <line>
             <bufferGeometry>
-              <bufferAttribute attach="attributes-position" count={exprPositions.length / 3} array={exprPositions} itemSize={3} />
+              <bufferAttribute
+                attach="attributes-position"
+                count={exprPositions.length / 3}
+                array={exprPositions}
+                itemSize={3}
+              />
             </bufferGeometry>
             <lineBasicMaterial linewidth={2} color="#22c55e" />
           </line>
@@ -541,7 +638,9 @@ const controlsRef = useRef();
         <MarkerCurve markers={displayMarkers} />
 
         {displayMarkers.map((m, idx) => {
-          const label = m.label ?? `(${m.x.toFixed(2)}, ${m.y.toFixed(2)}, ${m.z.toFixed(2)})`;
+          const label =
+            m.label ??
+            `(${m.x.toFixed(2)}, ${m.y.toFixed(2)}, ${m.z.toFixed(2)})`;
           const markerPosition = { x: m.x, y: m.y, z: m.z };
 
           return (
@@ -567,11 +666,12 @@ const controlsRef = useRef();
             </group>
           );
         })}
-        <OrbitControls ref={controlsRef} makeDefault />
-
-      {/* 방향 표시 + 각도 HUD */}
-      <OrientationOverlay controlsRef={controlsRef} />
-        <OrbitControls enableDamping dampingFactor={0.1} enabled={!controlsBusy} makeDefault />
+        <OrbitControls
+          ref={controlsRef}
+          makeDefault
+          enabled={!controlsBusy }
+        />
+        <OrientationOverlay controlsRef={controlsRef} />
       </Canvas>
     </div>
   );
