@@ -95,34 +95,28 @@ function GridAndAxes({
   xmax = 8,
   ymin = -8,
   ymax = 8,
+
+  // ✅ gridStep = major step
   gridStep = 1,
+  // ✅ minorDiv = major 1칸 분할 수
+  minorDiv = 4,
+
   gridMode = "major", // off | box | major | full
-  majorEvery = 5,
 }) {
-  const spanX = xmax - xmin;
-  const spanY = ymax - ymin;
-
-  const sizeScale = 1.5;
-  const cx = (xmin + xmax) / 2;
-  const cy = (ymin + ymax) / 2;
-
-  const sizeX = Math.max(1, Math.abs(spanX) * sizeScale);
-  const sizeY = Math.max(1, Math.abs(spanY) * sizeScale);
-
-  const x0 = cx - sizeX / 2;
-  const x1 = cx + sizeX / 2;
-  const y0 = cy - sizeY / 2;
-  const y1 = cy + sizeY / 2;
+  const x0 = xmin;
+  const x1 = xmax;
+  const y0 = ymin;
+  const y1 = ymax;
 
   const zGrid = 0.0;
-  const zAxis = 0.01; // z-fighting 방지
+  const zAxis = 0.01;
   const axisThickness = 0.06;
 
-  const step = Math.max(0.1, Number(gridStep) || 1);
-  const majorStep = step * Math.max(1, Number(majorEvery) || 5);
+  const majorStep = Math.max(0.1, Number(gridStep) || 1);
+  const div = Math.max(1, Math.floor(Number(minorDiv) || 4));
+  const minorStep = majorStep / div;
 
   const { minorPositions, majorPositions, boxPositions } = useMemo(() => {
-    // box(외곽선)
     const boxSegs = [
       [x0, y0, zGrid, x1, y0, zGrid],
       [x1, y0, zGrid, x1, y1, zGrid],
@@ -130,7 +124,6 @@ function GridAndAxes({
       [x0, y1, zGrid, x0, y0, zGrid],
     ];
 
-    // major lines
     const majorSegs = [];
     const mxStart = snapUp(x0, majorStep);
     const myStart = snapUp(y0, majorStep);
@@ -142,15 +135,15 @@ function GridAndAxes({
       majorSegs.push([x0, y, zGrid, x1, y, zGrid]);
     }
 
-    // minor lines (full일 때만)
+    // full 모드에서만 minor를 쓰지만, 계산은 미리 해둬도 OK
     const minorSegs = [];
-    const sxStart = snapUp(x0, step);
-    const syStart = snapUp(y0, step);
+    const sxStart = snapUp(x0, minorStep);
+    const syStart = snapUp(y0, minorStep);
 
-    for (let x = sxStart; x <= x1 + 1e-9; x += step) {
+    for (let x = sxStart; x <= x1 + 1e-9; x += minorStep) {
       minorSegs.push([x, y0, zGrid, x, y1, zGrid]);
     }
-    for (let y = syStart; y <= y1 + 1e-9; y += step) {
+    for (let y = syStart; y <= y1 + 1e-9; y += minorStep) {
       minorSegs.push([x0, y, zGrid, x1, y, zGrid]);
     }
 
@@ -159,11 +152,15 @@ function GridAndAxes({
       majorPositions: buildLineSegments(majorSegs),
       boxPositions: buildLineSegments(boxSegs),
     };
-  }, [x0, x1, y0, y1, step, majorStep]);
+  }, [x0, x1, y0, y1, majorStep, minorStep]);
+
+  const cx = (x0 + x1) / 2;
+  const cy = (y0 + y1) / 2;
+  const sizeX = Math.max(1, Math.abs(x1 - x0));
+  const sizeY = Math.max(1, Math.abs(y1 - y0));
 
   return (
     <group>
-      {/* ✅ Grid */}
       {gridMode === "box" && (
         <lineSegments>
           <bufferGeometry>
@@ -220,7 +217,7 @@ function GridAndAxes({
         </group>
       )}
 
-      {/* ✅ Axes (항상 유지) */}
+      {/* axes */}
       <mesh position={[cx, cy, zAxis]}>
         <boxGeometry args={[sizeX, axisThickness, axisThickness]} />
         <meshStandardMaterial color="#6039BC" />
@@ -446,6 +443,8 @@ export default function GraphCanvas({
   // ✅ 추가: 격자 모드(외부에서 제어 가능)
   gridMode,
   setGridMode,
+  minorDiv,
+  setMinorDiv,
 
   fn,
   typedFn,
@@ -457,6 +456,7 @@ export default function GraphCanvas({
   rulePolyDegree = 3,
   setRulePolyDegree,
   ruleError,
+  tightGridToCurves = true,
   showControls = true,
 }) {
   const wrapperRef = useRef(null);
@@ -488,6 +488,23 @@ export default function GraphCanvas({
     if (typeof setGridStep === "function") setGridStep(n);
     else setGridStepLocal(n);
   };
+  // ✅ minorDiv (Curve3D 스타일: major 1칸을 몇 등분할지)
+  const [minorDivLocal, setMinorDivLocal] = useState(minorDiv ?? 4);
+
+  useEffect(() => {
+    if (minorDiv !== undefined) setMinorDivLocal(minorDiv);
+  }, [minorDiv]);
+
+  const minorDivEff = Math.max(
+    1,
+    Math.floor(Number(minorDiv ?? minorDivLocal) || 4)
+  );
+
+  const setMinorDivEff = (v) => {
+    const n = Math.max(1, Math.floor(Number(v) || 4));
+    if (typeof setMinorDiv === "function") setMinorDiv(n);
+    else setMinorDivLocal(n);
+  };
 
   // ✅ grid mode (추가)
   const [gridModeLocal, setGridModeLocal] = useState(gridMode ?? "major");
@@ -506,8 +523,128 @@ export default function GraphCanvas({
   const showTyped = typedFn && (viewMode === "typed" || viewMode === "both");
   const showFit = fn && (viewMode === "fit" || viewMode === "both");
 
-  const yMinEff = Number.isFinite(ymin) ? ymin : xmin;
-  const yMaxEff = Number.isFinite(ymax) ? ymax : xmax;
+  // 드래그/편집 제한 범위(기존 동작 유지)
+  const dragYMin = Number.isFinite(ymin) ? ymin : xmin;
+  const dragYMax = Number.isFinite(ymax) ? ymax : xmax;
+
+  // ✅ 요청 반영: "그래프가 렌더링되는 구간"에 대해서만 그리드 출력
+  // - 표시 중인 곡선(fn/typedFn)을 샘플링해서 y-bounds를 계산
+  // - 비정상적으로 큰 값(비연속/점근선 등)은 MAX_ABS로 컷
+  // - 5%~95% 분위수로 안정적인 범위를 잡고 약간의 padding만 부여
+  // ✅ 요청 반영: "그래프가 렌더링되는 구간"에 대해서만 그리드 출력 +
+  // ✅ 추가: grid bounds padding(여유) + step 단위로 바깥쪽 스냅
+  const gridBounds = useMemo(() => {
+    const x0 = Number(xmin);
+    const x1 = Number(xmax);
+
+    if (!Number.isFinite(x0) || !Number.isFinite(x1) || x0 === x1) {
+      return { xmin: x0, xmax: x1, ymin: dragYMin, ymax: dragYMax };
+    }
+
+    // grid를 곡선에 타이트하게 붙이지 않는 옵션(기존 유지)
+    if (!tightGridToCurves) {
+      return { xmin: x0, xmax: x1, ymin: dragYMin, ymax: dragYMax };
+    }
+
+    const ys = [];
+    const N = 420;
+    const dx = (x1 - x0) / N;
+    const MAX_ABS = 1e5;
+
+    const sampleFn = (f) => {
+      if (typeof f !== "function") return;
+      for (let i = 0; i <= N; i++) {
+        const x = x0 + dx * i;
+        let y;
+        try {
+          y = f(x);
+        } catch {
+          continue;
+        }
+        const n = Number(y);
+        if (!Number.isFinite(n)) continue;
+        if (Math.abs(n) > MAX_ABS) continue;
+        ys.push(n);
+      }
+    };
+
+    // 현재 표시 중인 곡선만 bounds 계산에 사용
+    if (showFit) sampleFn(fn);
+    if (showTyped) sampleFn(typedFn);
+
+    // 곡선이 없거나 유효 샘플이 부족하면 기존 범위 사용
+    if (ys.length < 8) {
+      return { xmin: x0, xmax: x1, ymin: dragYMin, ymax: dragYMax };
+    }
+
+    ys.sort((a, b) => a - b);
+    const at = (p) => {
+      const idx = Math.floor((ys.length - 1) * p);
+      return ys[Math.max(0, Math.min(ys.length - 1, idx))];
+    };
+
+    // 분위수 기반(안정적) y-bounds
+    let yLo = at(0.05);
+    let yHi = at(0.95);
+
+    const step = Math.max(0.1, Number(gridStepEff) || 1);
+
+    // 거의 평평한 경우: 최소 높이 확보
+    let span = yHi - yLo;
+    if (!Number.isFinite(span) || Math.abs(span) < step * 0.5) {
+      const mid = at(0.5);
+      yLo = mid - step * 2;
+      yHi = mid + step * 2;
+      span = yHi - yLo;
+    }
+
+    // 1차 패딩(기존): 곡선 주변 여유
+    const corePad = Math.max(step * 0.5, span * 0.08);
+    let xMinGrid = x0;
+    let xMaxGrid = x1;
+    let yMinGrid = yLo - corePad;
+    let yMaxGrid = yHi + corePad;
+
+    // ✅ 추가 패딩(요청): "그래프와 격자가 딱 맞는 느낌" 제거용
+    // - 비율 패딩 + 최소 패딩(스텝 2칸) 같이 적용
+    const PAD_RATIO = 0.12;
+    const PAD_MIN = step * 2;
+
+    const xSpan = Math.max(1e-6, xMaxGrid - xMinGrid);
+    const ySpan = Math.max(1e-6, yMaxGrid - yMinGrid);
+
+    const padX = Math.max(PAD_MIN, xSpan * PAD_RATIO);
+    const padY = Math.max(PAD_MIN, ySpan * PAD_RATIO);
+
+    xMinGrid -= padX;
+    xMaxGrid += padX;
+    yMinGrid -= padY;
+    yMaxGrid += padY;
+
+    // ✅ 그리드 라인이 "딱 떨어지게" step 단위로 바깥쪽 스냅
+    const snapOut = (v, s, dir) => {
+      if (!Number.isFinite(v) || !Number.isFinite(s) || s <= 0) return v;
+      return dir < 0 ? Math.floor(v / s) * s : Math.ceil(v / s) * s;
+    };
+
+    xMinGrid = snapOut(xMinGrid, step, -1);
+    xMaxGrid = snapOut(xMaxGrid, step, +1);
+    yMinGrid = snapOut(yMinGrid, step, -1);
+    yMaxGrid = snapOut(yMaxGrid, step, +1);
+
+    return { xmin: xMinGrid, xmax: xMaxGrid, ymin: yMinGrid, ymax: yMaxGrid };
+  }, [
+    xmin,
+    xmax,
+    dragYMin,
+    dragYMax,
+    tightGridToCurves,
+    showFit,
+    showTyped,
+    fn,
+    typedFn,
+    gridStepEff,
+  ]);
 
   const commit = (idx) => onPointCommit?.(idx);
 
@@ -548,13 +685,13 @@ export default function GraphCanvas({
 
         {/* ✅ gridMode 적용 */}
         <GridAndAxes
-          xmin={xmin}
-          xmax={xmax}
-          ymin={yMinEff}
-          ymax={yMaxEff}
+          xmin={gridBounds.xmin}
+          xmax={gridBounds.xmax}
+          ymin={gridBounds.ymin}
+          ymax={gridBounds.ymax}
           gridStep={gridStepEff}
+          minorDiv={minorDivEff}
           gridMode={gridModeEff}
-          majorEvery={5}
         />
 
         {showFit && (
@@ -620,8 +757,8 @@ export default function GraphCanvas({
               position={{ x: p.x, y: p.y }}
               xmin={xmin}
               xmax={xmax}
-              ymin={yMinEff}
-              ymax={yMaxEff}
+              ymin={dragYMin}
+              ymax={dragYMax}
               onChange={(idx, xy) => onPointChange(idx, xy)}
               setControlsBusy={setControlsBusy}
               onCommit={commit}

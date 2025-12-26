@@ -585,6 +585,9 @@ export default function Studio() {
       xmin: -8,
       xmax: 8,
       gridStep: 1,
+      gridMode: "major",
+      viewMode: "both",
+      editMode: "drag",
       degree: 3,
       ruleMode: "free",
       rulePolyDegree: 3,
@@ -748,6 +751,35 @@ export default function Studio() {
             ...st,
             [tabId]: { ...st[tabId], gridStep: Math.max(0.1, Number(v) || 2) },
           })),
+
+
+        minorDiv: s.minorDiv ?? 4,
+        setMinorDiv: (v) =>
+          setTabState((st) => ({
+            ...st,
+            [tabId]: { ...st[tabId], minorDiv: Math.max(1, Math.floor(Number(v) || 4)) },
+          })),
+        gridMode: s.gridMode ?? "major",
+        setGridMode: (mode) =>
+          setTabState((st) => ({
+            ...st,
+            [tabId]: { ...st[tabId], gridMode: String(mode || "major") },
+          })),
+
+        viewMode: s.viewMode ?? "both",
+        setViewMode: (mode) =>
+          setTabState((st) => ({
+            ...st,
+            [tabId]: { ...st[tabId], viewMode: String(mode || "both") },
+          })),
+
+        editMode: s.editMode ?? "drag",
+        setEditMode: (mode) =>
+          setTabState((st) => ({
+            ...st,
+            [tabId]: { ...st[tabId], editMode: String(mode || "drag") },
+          })),
+
         points: s.points,
         curveKey: coeffs.map((c) => c.toFixed(6)).join("|") + `|v${s.ver ?? 0}`,
         updatePoint: (idx, xy) =>
@@ -1135,6 +1167,8 @@ export default function Studio() {
           ny,
           gridMode: payload.gridMode ?? "major",
           gridStep: payload.gridStep ?? 1,
+          viewMode: payload.viewMode ?? "both",
+          editMode: payload.editMode ?? "drag",
           minorDiv: payload.minorDiv ?? 4,
         };
       }
@@ -1168,6 +1202,9 @@ export default function Studio() {
           xmin: -8,
           xmax: 8,
           gridStep: 1,
+          gridMode: "major",
+          viewMode: "both",
+          editMode: "drag",
           degree: 3,
           ruleMode: "free",
           rulePolyDegree: 3,
@@ -1363,6 +1400,7 @@ export default function Studio() {
   // 활성 탭 상태 업데이트 helper
   const activeId = panes[focusedPane].activeId;
   const active = activeId ? tabState[activeId] : null;
+  const activeEqPack = activeId && tabState[activeId]?.type === "equation" ? deriveFor(activeId) : null;
 
   // 이전 placeholder 제거 — currentContext를 사용
 
@@ -1388,6 +1426,9 @@ export default function Studio() {
           xmax: s.xmax,
 
           gridStep: s.gridStep ?? 1,
+          gridMode: s.gridMode ?? "major",
+          viewMode: s.viewMode ?? "both",
+          editMode: s.editMode ?? "drag",
           degree: s.degree,
           points: s.points,
         };
@@ -1705,6 +1746,19 @@ export default function Studio() {
             setXmin={setDomainXmin}
             setXmax={setDomainXmax}
             onResampleDomain={resampleDomain}
+            gridMode={activeEqPack?.gridMode}
+            setGridMode={activeEqPack?.setGridMode}
+            gridStep={activeEqPack?.gridStep}
+            setGridStep={activeEqPack?.setGridStep}
+            viewMode={activeEqPack?.viewMode}
+            setViewMode={activeEqPack?.setViewMode}
+            editMode={activeEqPack?.editMode}
+            setEditMode={activeEqPack?.setEditMode}
+            ruleMode={activeEqPack?.ruleMode}
+            setRuleMode={activeEqPack?.setRuleMode}
+            rulePolyDegree={activeEqPack?.rulePolyDegree}
+            setRulePolyDegree={activeEqPack?.setRulePolyDegree}
+            ruleError={activeEqPack?.ruleError}
             showLeftPanel={showLeftPanel}
             onToggleLeftPanel={() => setShowLeftPanel((v) => !v)}
           />
@@ -1747,6 +1801,12 @@ export default function Studio() {
                     xmax={leftPack.xmax}
                     gridStep={leftPack.gridStep}
                     setGridStep={leftPack.setGridStep}
+                    gridMode={leftPack.gridMode}
+                    setGridMode={leftPack.setGridMode}
+                    viewMode={leftPack.viewMode}
+                    setViewMode={leftPack.setViewMode}
+                    editMode={leftPack.editMode}
+                    setEditMode={leftPack.setEditMode}
                     fittedFn={leftPack.fittedFn}
                     typedFn={leftPack.typedFn}
                     curveKey={leftPack.curveKey}
@@ -1757,6 +1817,7 @@ export default function Studio() {
                     rulePolyDegree={leftPack.rulePolyDegree}
                     setRulePolyDegree={leftPack.setRulePolyDegree}
                     ruleError={leftPack.ruleError}
+                    showControls={false}
                   />
                 ) : (
                   <div className="empty-hint">왼쪽에 열린 탭이 없습니다.</div>
@@ -1813,6 +1874,14 @@ export default function Studio() {
                         updatePoint={rightPack.updatePoint}
                         xmin={rightPack.xmin}
                         xmax={rightPack.xmax}
+                        gridStep={rightPack.gridStep}
+                        setGridStep={rightPack.setGridStep}
+                        gridMode={rightPack.gridMode}
+                        setGridMode={rightPack.setGridMode}
+                        viewMode={rightPack.viewMode}
+                        setViewMode={rightPack.setViewMode}
+                        editMode={rightPack.editMode}
+                        setEditMode={rightPack.setEditMode}
                         fittedFn={rightPack.fittedFn}
                         typedFn={rightPack.typedFn}
                         curveKey={rightPack.curveKey}
@@ -1823,6 +1892,7 @@ export default function Studio() {
                         rulePolyDegree={rightPack.rulePolyDegree}
                         setRulePolyDegree={rightPack.setRulePolyDegree}
                         ruleError={rightPack.ruleError}
+                        showControls={false}
                       />
                     ) : (
                       <div className="empty-hint">

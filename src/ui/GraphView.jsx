@@ -1,39 +1,51 @@
 // src/ui/GraphView.jsx
 import GraphCanvas from "./GraphCanvas";
 
+/**
+ * GraphView is a thin wrapper around GraphCanvas.
+ * All rendering options (grid/view/edit/rule) should be controlled from Toolbar via Studio tab-state.
+ */
 export default function GraphView({
   points = [],
   updatePoint,
   commitRule,
+
   xmin,
   xmax,
   ymin,
   ymax,
-  gridStep,
-  setGridStep,
 
-  // ✅ 추가: 격자 모드(Off/Box/Major/Full)
+  // Grid (Curve3D-style)
   gridMode,
   setGridMode,
+  gridStep,
+  setGridStep,
+  minorDiv,
+  setMinorDiv,
 
+  // View/Edit
+  viewMode,
+  setViewMode,
+  editMode,
+  setEditMode,
+
+  // Curves
   fittedFn,
   typedFn,
   curveKey,
   markers = [],
 
-  // rule editing (optional)
+  // Rule fitting
   ruleMode = "free",
   setRuleMode,
   rulePolyDegree = 3,
   setRulePolyDegree,
   ruleError,
-  showControls = true,
+
+  showControls = false,
 }) {
   return (
-    <div
-      className="graph-view"
-      style={{ width: "100%", height: "100%", minHeight: 0 }}
-    >
+    <div className="graph-view" style={{ width: "100%", height: "100%", minHeight: 0 }}>
       <GraphCanvas
         points={points}
         onPointChange={updatePoint}
@@ -42,13 +54,16 @@ export default function GraphView({
         xmax={xmax}
         ymin={ymin}
         ymax={ymax}
-        gridStep={gridStep}
-        setGridStep={setGridStep}
-
-        // ✅ 추가 전달
         gridMode={gridMode}
         setGridMode={setGridMode}
-
+        gridStep={gridStep}
+        setGridStep={setGridStep}
+        minorDiv={minorDiv}
+        setMinorDiv={setMinorDiv}
+        viewMode={viewMode}
+        setViewMode={setViewMode}
+        editMode={editMode}
+        setEditMode={setEditMode}
         fn={fittedFn}
         typedFn={typedFn}
         curveKey={curveKey}
