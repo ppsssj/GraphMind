@@ -14,28 +14,30 @@ export default function Curve3DView({ curve3d, onChange }) {
     xExpr: curve3d.xExpr ?? "",
     yExpr: curve3d.yExpr ?? "",
     zExpr: curve3d.zExpr ?? "",
-    tMin: curve3d.tMin ?? -2,
-    tMax: curve3d.tMax ?? 2,
-    samples: curve3d.samples ?? 200,
+    tMin: curve3d.tMin ?? 0,
+    tMax: curve3d.tMax ?? 2 * Math.PI,
+    samples: curve3d.samples ?? 400,
 
-    // Grid
-    gridMode: curve3d.gridMode ?? "major", // "off" | "box" | "major" | "full"
+    gridMode: curve3d.gridMode ?? "major",
     gridStep: curve3d.gridStep ?? 1,
     minorDiv: curve3d.minorDiv ?? 4,
+
+    deformSigma: curve3d.deformSigma ?? 0.6,
+    maxDelta: curve3d.maxDelta ?? 1.5,
 
     markers: Array.isArray(curve3d.markers) ? curve3d.markers : [],
     editMode: curve3d.editMode ?? "drag",
   };
 
   const handleMarkerChange = (index, pos) => {
-    const next = [...(merged.markers || [])];
-    if (!next[index]) return;
-    next[index] = { ...next[index], ...pos };
+    const next = [...merged.markers];
+    const prev = next[index] || {};
+    next[index] = { ...prev, ...pos };
     onChange?.({ markers: next });
   };
 
-  const handleRecalculateExpressions = ({ xExpr, yExpr, zExpr }) => {
-    onChange?.({ xExpr, yExpr, zExpr });
+  const handleRecalculateExpressions = (patch) => {
+    onChange?.(patch);
   };
 
   return (
@@ -57,6 +59,8 @@ export default function Curve3DView({ curve3d, onChange }) {
         onMarkerChange={handleMarkerChange}
         onRecalculateExpressions={handleRecalculateExpressions}
         editMode={merged.editMode}
+        deformSigma={merged.deformSigma}
+        maxDelta={merged.maxDelta}
       />
     </div>
   );
