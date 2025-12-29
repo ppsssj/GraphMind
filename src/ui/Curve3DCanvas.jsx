@@ -320,8 +320,9 @@ function AltClickAddMarker({
 
       // ✅ Alt+드래그: 박스 내부 마커들을 "클릭된 것처럼" 선택 처리
       const keys = computeKeysInRect(p.startX, p.startY, p.x, p.y);
-      if (keys.length > 0) onSelectKeys?.(keys);
-    };
+      const append = !!(ev.ctrlKey || ev.metaKey);
+      onSelectKeys?.(keys, { append });
+};
 
     el.addEventListener("contextmenu", onContextMenu);
     el.addEventListener("pointerdown", onPointerDown);
@@ -410,9 +411,10 @@ function CubeGrid3D({ half = 6, gridMode = "major", majorStep = 1, minorDiv = 4,
   const div = Math.max(2, Number(minorDiv) || 4);
   const stepMinor = stepMajor / div;
 
-  // ✅ Major/Full만 bbox(로컬) 적용. Box는 기존 글로벌 큐브 유지.
+  
+  // ✅ bbox(로컬 범위) 적용: box/major/full 모두 지원
   const range = useMemo(() => {
-    if ((mode === "major" || mode === "full") && bbox) {
+    if (bbox && mode !== "off") {
       return {
         minX: bbox.minX,
         maxX: bbox.maxX,
@@ -425,10 +427,35 @@ function CubeGrid3D({ half = 6, gridMode = "major", majorStep = 1, minorDiv = 4,
     return { minX: -half, maxX: half, minY: -half, maxY: half, minZ: -half, maxZ: half };
   }, [mode, bbox, half]);
 
-  const planeSize = half * 2;
-  const boxGeo = useMemo(() => new THREE.BoxGeometry(planeSize, planeSize, planeSize), [planeSize]);
+  // ✅ box 모드: bbox 범위에 맞춘 12개 엣지 라인(동적 재계산)
+  const boxEdgesGeo = useMemo(() => {
+    if (mode !== "box") return null;
+    const { minX, maxX, minY, maxY, minZ, maxZ } = range;
 
-  // ✅ “중복 제거”된 내부 라티스: X방향 / Y방향 / Z방향 3 family만 생성
+    const pts = [
+      // bottom rectangle
+      minX, minY, minZ,  maxX, minY, minZ,
+      maxX, minY, minZ,  maxX, minY, maxZ,
+      maxX, minY, maxZ,  minX, minY, maxZ,
+      minX, minY, maxZ,  minX, minY, minZ,
+
+      // top rectangle
+      minX, maxY, minZ,  maxX, maxY, minZ,
+      maxX, maxY, minZ,  maxX, maxY, maxZ,
+      maxX, maxY, maxZ,  minX, maxY, maxZ,
+      minX, maxY, maxZ,  minX, maxY, minZ,
+
+      // vertical edges
+      minX, minY, minZ,  minX, maxY, minZ,
+      maxX, minY, minZ,  maxX, maxY, minZ,
+      maxX, minY, maxZ,  maxX, maxY, maxZ,
+      minX, minY, maxZ,  minX, maxY, maxZ,
+    ];
+
+    return new Float32Array(pts);
+  }, [mode, range.minX, range.maxX, range.minY, range.maxY, range.minZ, range.maxZ]);
+
+// ✅ “중복 제거”된 내부 라티스: X방향 / Y방향 / Z방향 3 family만 생성
   const majorLineGeo = useMemo(() => {
     if (!(mode === "major" || mode === "full")) return null;
 
@@ -492,15 +519,27 @@ function CubeGrid3D({ half = 6, gridMode = "major", majorStep = 1, minorDiv = 4,
   return (
     <group>
       {/* box only (global) */}
-      {mode === "box" && (
-        <lineSegments geometry={boxGeo}>
+      {mode === "box" && boxEdgesGeo && (
+        <lineSegments
+          key={`box-${range.minX}-${range.maxX}-${range.minY}-${range.maxY}-${range.minZ}-${range.maxZ}`}
+        >
+          <bufferGeometry>
+            <bufferAttribute
+              attach="attributes-position"
+              array={boxEdgesGeo}
+              count={boxEdgesGeo.length / 3}
+              itemSize={3}
+            />
+          </bufferGeometry>
           <lineBasicMaterial color={BOX_MAT.color} transparent opacity={BOX_MAT.opacity} />
         </lineSegments>
       )}
 
       {/* major grid (local when bbox present) */}
       {(mode === "major" || mode === "full") && majorLineGeo && (
-        <lineSegments>
+        <lineSegments
+          key={`major-${range.minX}-${range.maxX}-${range.minY}-${range.maxY}-${range.minZ}-${range.maxZ}-${stepMajor}`}
+        >
           <bufferGeometry>
             <bufferAttribute
               attach="attributes-position"
@@ -515,7 +554,9 @@ function CubeGrid3D({ half = 6, gridMode = "major", majorStep = 1, minorDiv = 4,
 
       {/* minor grid (full only, local when bbox present) */}
       {mode === "full" && minorLineGeo && (
-        <lineSegments>
+        <lineSegments
+          key={`minor-${range.minX}-${range.maxX}-${range.minY}-${range.maxY}-${range.minZ}-${range.maxZ}-${stepMinor}`}
+        >
           <bufferGeometry>
             <bufferAttribute
               attach="attributes-position"
@@ -601,8 +642,8 @@ function DraggableMarker3D({
     e.stopPropagation();
     suppressAltClick?.();
 
-    // ✅ "이미 박스 선택된 노드"를 드래그하는 경우: 선택을 유지해야 그룹 이동이 됨
-    if (!isSelected) if (!isSelected) onSelect?.(markerKey);
+    // support ctrl/meta append/toggle selection when clicking
+    onSelect?.(markerKey, { append: !!(e.ctrlKey || e.metaKey) });
 
     setDragging(true);
     setControlsBusy?.(true);
@@ -747,7 +788,7 @@ function EditableMarker3D({ marker, markerKey, onRemove, onSelect, isSelected, o
   const handleSelect = (e) => {
     e.stopPropagation();
     suppressAltClick?.();
-    if (!isSelected) onSelect?.(markerKey);
+    onSelect?.(markerKey, { append: !!(e.ctrlKey || e.metaKey) });
   };
 
   return (
@@ -844,6 +885,21 @@ const selectedKey = useMemo(() => {
   const it = selectedKeys.values().next();
   return it.done ? null : it.value;
 }, [selectedKeys]);
+
+  // select helper: replace selection or append/toggle when opts.append true
+  const selectKey = (k, opts) => {
+    setSelectedKeys((prev) => {
+      const base = prev instanceof Set ? new Set(prev) : new Set();
+      const append = !!opts?.append;
+      if (!append) return new Set([k]);
+      if (base.has(k)) {
+        base.delete(k);
+        return base;
+      }
+      base.add(k);
+      return base;
+    });
+  };
 
   // base curve positions
   const basePositions = useMemo(() => {
@@ -952,10 +1008,29 @@ const selectedKey = useMemo(() => {
   // ✅ 로컬 격자 bbox: 현재 렌더링 곡선(edit 우선, 없으면 base) 기준으로 계산
   const localGridBBox = useMemo(() => {
     // major/full에서만 사용
-    if (!(gridMode === "major" || gridMode === "full")) return null;
+    if (!(gridMode === "box" || gridMode === "major" || gridMode === "full")) return null;
 
     const src = editPositions ?? basePositions;
-    const b = computeBBoxFromPositions(src);
+    // ✅ 곡선 + (현재 표시되는) 마커 좌표까지 포함해서 bbox 계산
+    const b0 = computeBBoxFromPositions(src);
+    let b = b0;
+    const ms = Array.isArray(displayMarkers) ? displayMarkers : [];
+    for (const m of ms) {
+      const x = Number(m?.x);
+      const y = Number(m?.y);
+      const z = Number(m?.z);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+      if (!b) {
+        b = { minX: x, minY: y, minZ: z, maxX: x, maxY: y, maxZ: z };
+      } else {
+        if (x < b.minX) b.minX = x;
+        if (y < b.minY) b.minY = y;
+        if (z < b.minZ) b.minZ = z;
+        if (x > b.maxX) b.maxX = x;
+        if (y > b.maxY) b.maxY = y;
+        if (z > b.maxZ) b.maxZ = z;
+      }
+    }
     if (!b) return null;
 
     const step = Math.max(0.1, Number(gridStep) || 1);
@@ -971,7 +1046,18 @@ const selectedKey = useMemo(() => {
     };
 
     return snapBBoxToStep(padded, step);
-  }, [gridMode, editPositions, basePositions, gridStep]);
+  }, [gridMode, editPositions, basePositions, gridStep, displayMarkers]);
+  // ✅ axes/grid 시각 범위도 bbox를 따라가도록(체감상 '격자 재계산'이 안되는 문제 예방)
+  const gridHalf = useMemo(() => {
+    if (!localGridBBox) return 6;
+    const sx = (localGridBBox.maxX - localGridBBox.minX) / 2;
+    const sy = (localGridBBox.maxY - localGridBBox.minY) / 2;
+    const sz = (localGridBBox.maxZ - localGridBBox.minZ) / 2;
+    const m = Math.max(sx, sy, sz);
+    return Number.isFinite(m) ? Math.max(6, m) : 6;
+  }, [localGridBBox]);
+
+
 
   const [controlsBusy, setControlsBusy] = useState(false);
   const controlsBusyRef = useRef(false);
@@ -1201,12 +1287,22 @@ const [altGestureActive, setAltGestureActive] = useState(false);
           suppressRef={suppressAltClickRef}
           markers={displayMarkers}
           onMarqueeChange={setMarqueeBox}
-          onSelectKeys={(keys) => setSelectedKeys(new Set(keys))}
+          onSelectKeys={(keys, opts) =>
+            setSelectedKeys((prev) => {
+              const base = prev instanceof Set ? prev : new Set();
+              if (opts?.append) {
+                const next = new Set(base);
+                for (const k of keys || []) next.add(k);
+                return next;
+              }
+              return new Set(keys || []);
+            })
+          }
           onAltGestureActiveChange={setAltGestureActive}
         />
 
         {/* ✅ Major/Full일 때는 bbox 기반 로컬 격자 */}
-        <Axes3D size={6} gridMode={gridMode} gridStep={gridStep} minorDiv={minorDiv} bbox={localGridBBox} />
+        <Axes3D size={gridHalf} gridMode={gridMode} gridStep={gridStep} minorDiv={minorDiv} bbox={localGridBBox} />
 
         {/* 기준(회색) */}
         <Line3D positions={basePositions} color="#9ca3af" linewidth={1} lineObjRef={baseLineRef} />
@@ -1227,7 +1323,7 @@ const [altGestureActive, setAltGestureActive] = useState(false);
               marker={m}
               markerKey={markerKey}
               onRemove={removeMarkerByKey}
-              onSelect={(k) => setSelectedKeys(new Set([k]))}
+              onSelect={selectKey}
               isSelected={isSelected}
               suppressAltClick={suppressAltClick}
               onChange={handleMarkerChangeByKey}
@@ -1243,7 +1339,7 @@ const [altGestureActive, setAltGestureActive] = useState(false);
               selectedKeys={selectedKeys}
               onMarkersChange={onMarkersChange}
               onRemove={removeMarkerByKey}
-              onSelect={(k) => setSelectedKeys(new Set([k]))}
+              onSelect={selectKey}
               isSelected={isSelected}
               suppressAltClick={suppressAltClick}
               onChange={handleMarkerChangeByKey}
