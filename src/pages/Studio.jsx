@@ -1103,25 +1103,31 @@ useEffect(() => {
         const ruleMode = cur.ruleMode ?? "free";
         const polyDegree = cur.rulePolyDegree ?? cur.degree;
 
-        const res = fitRuleFromPoints(ruleMode, pts, { polyDegree });
-        if (!res.ok) {
+        // ✅ free: just commit points (add/remove/move) without changing equation
+        if (ruleMode === "free") {
           setTabState((st) => ({
             ...st,
             [tabId]: {
               ...st[tabId],
-              ruleError: res.message ?? "규칙 적용 실패",
+              points: pts,
+              ruleError: null,
+              ver: (st[tabId].ver ?? 0) + 1,
             },
           }));
           scheduleFinalizeMoveTxn(tabId);
           return;
         }
 
-        if (ruleMode === "free") {
+        const res = fitRuleFromPoints(ruleMode, pts, { polyDegree });
+
+        // ✅ keep pointsOverride even if fitting fails
+        if (!res.ok) {
           setTabState((st) => ({
             ...st,
             [tabId]: {
               ...st[tabId],
-              ruleError: null,
+              points: pts,
+              ruleError: res.message ?? "규칙 적용 실패",
               ver: (st[tabId].ver ?? 0) + 1,
             },
           }));
@@ -1213,6 +1219,63 @@ updatePoint: (idx, xy) => {
   });
 },
         commitRule,
+
+        // ✅ Canvas interactions (Alt+click add, right-click remove)
+        addPoint: (pt) => {
+          const cur = tabState[tabId];
+          if (!cur || cur.type !== "equation") return;
+
+          const nextPts = [...(cur.points ?? [])];
+          nextPts.push({ x: Number(pt?.x) || 0, y: Number(pt?.y) || 0 });
+
+          const mode = cur.ruleMode ?? "free";
+          if (mode === "free") {
+            beginMoveTxn(tabId);
+            setTabState((st) => ({
+              ...st,
+              [tabId]: {
+                ...st[tabId],
+                points: nextPts,
+                ruleError: null,
+                ver: (st[tabId].ver ?? 0) + 1,
+              },
+            }));
+            scheduleFinalizeMoveTxn(tabId);
+            return;
+          }
+
+          // rule mode: keep family by refitting/snap with pointsOverride
+          commitRule(nextPts);
+        },
+
+        removePoint: (idxOrKey) => {
+          const cur = tabState[tabId];
+          if (!cur || cur.type !== "equation") return;
+
+          const arr = Array.isArray(cur.points) ? cur.points : [];
+          const idx = typeof idxOrKey === "number" ? idxOrKey : Number(idxOrKey);
+          if (!Number.isFinite(idx)) return;
+
+          const nextPts = arr.filter((_, i) => i !== idx);
+
+          const mode = cur.ruleMode ?? "free";
+          if (mode === "free") {
+            beginMoveTxn(tabId);
+            setTabState((st) => ({
+              ...st,
+              [tabId]: {
+                ...st[tabId],
+                points: nextPts,
+                ruleError: null,
+                ver: (st[tabId].ver ?? 0) + 1,
+              },
+            }));
+            scheduleFinalizeMoveTxn(tabId);
+            return;
+          }
+
+          commitRule(nextPts);
+        },
 
         ruleMode: s.ruleMode ?? "free",
         setRuleMode,
@@ -2317,6 +2380,8 @@ updatePoint: (idx, xy) => {
                     curveKey={leftPack.curveKey}
                     markers={leftActive?.markers ?? []}
                     commitRule={leftPack.commitRule}
+                    addPoint={leftPack.addPoint}
+                    removePoint={leftPack.removePoint}
                     ruleMode={leftPack.ruleMode}
                     setRuleMode={leftPack.setRuleMode}
                     rulePolyDegree={leftPack.rulePolyDegree}
@@ -2392,6 +2457,8 @@ updatePoint: (idx, xy) => {
                         curveKey={rightPack.curveKey}
                         markers={rightActive?.markers ?? []}
                         commitRule={rightPack.commitRule}
+                    addPoint={rightPack.addPoint}
+                    removePoint={rightPack.removePoint}
                         ruleMode={rightPack.ruleMode}
                         setRuleMode={rightPack.setRuleMode}
                         rulePolyDegree={rightPack.rulePolyDegree}
