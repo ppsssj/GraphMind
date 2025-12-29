@@ -10,8 +10,8 @@ import GraphView from "../ui/GraphView";
 import Array3DView from "../ui/Array3DView";
 import Curve3DView from "../ui/Curve3DView";
 import Surface3DView from "../ui/Surface3DView";
-import { dummyEquations, dummyResources } from "../data/dummyEquations";
-import { studioReducer, initialStudioState, actions } from "../state/studioReducer";
+import { dummyResources } from "../data/dummyEquations";
+// (studioReducer import removed: not used in this Studio-only integration)
 import "../styles/Studio.css";
 import AIPanel from "../components/ai/AIPanel";
 const math = create(all, {});
@@ -707,8 +707,7 @@ export default function Studio() {
     };
   }, []);
 
-  const [equationExpr, setEquationExpr] = useState(initialFormula);
-
+  // equation state is stored per-tab in tabState (SSOT)
 
 // ── Undo/Redo for equation-point (node) moves: per-tab history ─────────────
 const tabStateRef = useRef(null);
@@ -983,8 +982,6 @@ const applySnapshotToTab = useCallback(
     // equation 전용: 상단 입력/탭 제목/Vault 동기화
     if ((kind ?? "equation") === "equation") {
       const normEq = normalizeFormula(snap.equation);
-      setEquationExpr(normEq);
-
       setTabs((t) => {
         const prev = t.byId?.[tabId];
         if (!prev) return t;
@@ -1972,9 +1969,6 @@ updatePoint: (idx, xy) => {
       ...st,
       [activeId]: { ...st[activeId], equation: norm },
     }));
-
-    // Apply/Resample 등의 버튼에서 사용할 로컬 표시용 상태
-    setEquationExpr(norm);
   };
 
   const setDegreeWrapped = (deg) => {
@@ -2242,7 +2236,23 @@ updatePoint: (idx, xy) => {
           equations={equationsFromVault}
           resources={vaultResources}
           onPreview={(f) => {
-            setEquationExpr(f);
+            // Preview: update equation of current left active equation tab (no new tab)
+            const tid = panes.left.activeId;
+            const s = tid ? tabState[tid] : null;
+            if (tid && s?.type === "equation") {
+              const norm = normalizeFormula(f);
+              setTabState((st) => ({
+                ...st,
+                [tid]: { ...st[tid], equation: norm, ver: (st[tid].ver ?? 0) + 1 },
+              }));
+              setTabs((t) => ({
+                ...t,
+                byId: {
+                  ...t.byId,
+                  [tid]: { ...t.byId[tid], title: titleFromFormula(norm) },
+                },
+              }));
+            }
             setFocusedPane("left");
           }}
           onOpenArray={(res) =>
@@ -2407,6 +2417,7 @@ updatePoint: (idx, xy) => {
                   }`}
                   surface3d={leftActive.surface3d}
                   onChange={(patch) => updateSurface3D(leftActiveId, patch)}
+                  
                 />
               ) : (
                 <div className="empty-hint">왼쪽에 열린 탭이 없습니다.</div>

@@ -1,7 +1,6 @@
 // src/ui/Surface3DView.jsx
 import { useCallback, useMemo } from "react";
 import Surface3DCanvas from "./Surface3DCanvas";
-import Surface3DToolbar from "./Surface3DToolbar";
 import { create, all } from "mathjs";
 
 const mathjs = create(all, {});
@@ -48,7 +47,7 @@ function buildPolyExpr(terms) {
 
 /**
  * markers: [{id, x, y, z}]
- * degree: 1~4
+ * degree: 1~6
  * 최소제곱으로 다항식 표면 피팅 후 expr 문자열 반환
  */
 function fitSurfacePolynomial(markers, degree) {
@@ -104,14 +103,21 @@ function fitSurfacePolynomial(markers, degree) {
   return { ok: true, expr: buildPolyExpr(terms), degree: d };
 }
 
-export default function Surface3DView({ surface3d, onChange }) {
-  // ✅ Hook은 항상 동일한 순서로 호출되어야 하므로,
-  // early return을 Hook들 아래로 내립니다.
+export default function Surface3DView({
+  surface3d,
+  onChange,
 
+  // ✅ Studio에서 reducer로 직접 연결하고 싶을 때(권장)
+  onPointAdd,
+  onPointRemove,
+}) {
   const merged = useMemo(() => {
     const s = surface3d ?? {};
     return {
       expr: s.expr ?? "sin(x) * cos(y)",
+      // baseExpr가 있으면 Canvas에서 bounds에 같이 고려 가능(필요 시)
+      baseExpr: s.baseExpr ?? null,
+
       xMin: Number.isFinite(Number(s.xMin)) ? Number(s.xMin) : -5,
       xMax: Number.isFinite(Number(s.xMax)) ? Number(s.xMax) : 5,
       yMin: Number.isFinite(Number(s.yMin)) ? Number(s.yMin) : -5,
@@ -137,19 +143,11 @@ export default function Surface3DView({ surface3d, onChange }) {
     [onChange]
   );
 
-  const doFit = useCallback(
-    (markers = merged.markers) => {
-      const res = fitSurfacePolynomial(markers, merged.degree);
-      if (!res.ok) return false;
-      commit({ expr: res.expr });
-      return true;
-    },
-    [commit, merged.degree, merged.markers]
-  );
-
   const handleMarkersChange = useCallback(
     (nextMarkers, { fit = false } = {}) => {
       commit({ markers: nextMarkers });
+
+      // 기존 규칙 유지: drag 끝에서만 fit 요청이 오면 expr 갱신
       if (fit) {
         const res = fitSurfacePolynomial(nextMarkers, merged.degree);
         if (res.ok) commit({ expr: res.expr });
@@ -158,28 +156,47 @@ export default function Surface3DView({ surface3d, onChange }) {
     [commit, merged.degree]
   );
 
-  const handleAddMarker = useCallback(
-    (m) => {
-      const next = [...(merged.markers || []), m];
+  // ✅ Point Add/Remove: Studio에서 내려오면 그대로 사용, 아니면 View에서 markers 패치로 fallback
+  const handlePointAdd = useCallback(
+    (pt) => {
+      if (typeof onPointAdd === "function") {
+        onPointAdd(pt);
+        return;
+      }
+      const next = [...(merged.markers || []), pt];
       commit({ markers: next });
     },
-    [commit, merged.markers]
+    [onPointAdd, merged.markers, commit]
   );
 
-  const handleClearMarkers = useCallback(() => {
-    commit({ markers: [] });
-  }, [commit]);
+  const handlePointRemove = useCallback(
+    ({ id, index } = {}) => {
+      if (typeof onPointRemove === "function") {
+        onPointRemove({ id, index });
+        return;
+      }
+      const arr = Array.isArray(merged.markers) ? [...merged.markers] : [];
+      if (id != null) {
+        const k = arr.findIndex((m) => (m?.id ?? null) === id);
+        if (k >= 0) arr.splice(k, 1);
+      } else if (Number.isFinite(Number(index))) {
+        const i = Number(index);
+        if (i >= 0 && i < arr.length) arr.splice(i, 1);
+      }
+      commit({ markers: arr });
+    },
+    [onPointRemove, merged.markers, commit]
+  );
 
-  // ✅ Hook 호출 이후에 early return
   if (!surface3d) {
     return <div className="empty-hint">3D 곡면 정보가 없습니다.</div>;
   }
 
   return (
     <div className="graph-view">
-
       <Surface3DCanvas
         expr={merged.expr}
+        baseExpr={merged.baseExpr}
         xMin={merged.xMin}
         xMax={merged.xMax}
         yMin={merged.yMin}
@@ -189,7 +206,8 @@ export default function Surface3DView({ surface3d, onChange }) {
         markers={merged.markers}
         editMode={merged.editMode}
         degree={merged.degree}
-        onAddMarker={handleAddMarker}
+        onPointAdd={handlePointAdd}
+        onPointRemove={handlePointRemove}
         onMarkersChange={handleMarkersChange}
         gridMode={merged.gridMode}
         gridStep={merged.gridStep}
