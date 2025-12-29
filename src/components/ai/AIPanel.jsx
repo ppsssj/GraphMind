@@ -62,6 +62,12 @@ function normalizeCmd(obj) {
     "mark_roots",
     "mark_intersections",
     "clear_markers",
+    "closest_to_point",
+    "slice_t",
+    "tangent_at",
+    "slice_x",
+    "slice_y",
+    "contour_z",
   ]);
   if (!allowed.has(action)) return null;
 
@@ -81,10 +87,30 @@ function buildContextPrefix(ctx) {
       ctx.tabId ?? "-"
     })\nx(t): ${ctx.xExpr}\ny(t): ${ctx.yExpr}\nz(t): ${ctx.zExpr}\n\n`;
   }
-  if (ctx.type === "array3d") {
-    return `현재 3D 배열: ${ctx.title ?? "(untitled)"} (tabId:${
-      ctx.tabId ?? "-"
-    })\n(배열 본문은 생략)\n\n`;
+  if (ctx.type === "array3d" || ctx.type === "surface3d") {
+    // Surface3D context (some projects use type="array3d")
+    const expr = ctx.expr ?? ctx.zExpr ?? ctx.equation ?? null;
+    const xMin = ctx.xMin ?? ctx.xmin ?? null;
+    const xMax = ctx.xMax ?? ctx.xmax ?? null;
+    const yMin = ctx.yMin ?? null;
+    const yMax = ctx.yMax ?? null;
+    return (
+      `현재 3D 표면: ${ctx.title ?? "(untitled)"} (tabId:${ctx.tabId ?? "-"})
+` +
+      (expr
+        ? `z(x,y): ${expr}
+`
+        : "") +
+      (xMin !== null && xMax !== null
+        ? `X 범위: [${xMin}, ${xMax}]
+`
+        : "") +
+      (yMin !== null && yMax !== null
+        ? `Y 범위: [${yMin}, ${yMax}]
+`
+        : "") +
+      "\n"
+    );
   }
   return `현재 탭: ${ctx.title ?? "(untitled)"} (tabId:${
     ctx.tabId ?? "-"
@@ -138,6 +164,153 @@ function truncate(s, n) {
   const t = (s ?? "").toString().replace(/\s+/g, " ").trim();
   if (t.length <= n) return t;
   return t.slice(0, n) + "…";
+}
+
+function buildControlExtractorPrompt(ctx) {
+  const type = ctx?.type ?? "none";
+
+  // Base schema shared across tabs. `pane` and `tabId` are added by AIPanel when calling onCommand.
+  const common = `
+You are GraphMind Command Extractor.
+Return ONLY ONE JSON object. No markdown. No commentary.
+
+BaseSchema:
+{
+  "action": string,
+  "target": "typed|fit",
+  "args": object,
+  "message": "Korean short status message"
+}
+
+GlobalRules:
+- If unclear => action="none" and message asks for clarification.
+- Defaults: target="typed"
+`.trim();
+
+  if (type === "equation") {
+    return (
+      common +
+      `
+
+Allowed actions (2D):
+- none | mark_max | mark_min | mark_roots | mark_intersections | clear_markers
+
+Args:
+{
+  "samples"?: number,
+  "maxRoots"?: number,
+  "maxIntersections"?: number,
+  "tol"?: number
+}
+
+Rules:
+- "최대값/최댓값" => mark_max
+- "최소값/최솟값" => mark_min
+- "근/영점/zero/roots" => mark_roots
+- "교점/교차점/intersection" => mark_intersections
+- "지워/삭제/클리어" => clear_markers
+
+Defaults:
+- args.samples=2500
+- args.maxRoots=12
+- args.maxIntersections=12
+- args.tol=1e-6
+`.trim()
+    );
+  }
+
+  if (type === "curve3d") {
+    return (
+      common +
+      `
+
+Allowed actions (Curve3D parametric):
+- none | mark_max | mark_min | mark_roots | mark_intersections | clear_markers
+- closest_to_point | slice_t | tangent_at
+
+Args:
+{
+  "axis"?: "x"|"y"|"z",         // for max/min/roots/intersections. default: "z"
+  "samples"?: number,           // default: 800
+  "maxRoots"?: number,          // default: 12
+  "maxIntersections"?: number,  // default: 12
+
+  "point"?: { "x": number, "y": number, "z": number }, // for closest_to_point (default point: origin)
+  "t"?: number,                 // for slice_t / tangent_at
+  "dt"?: number                 // for tangent_at numerical diff (default: 1e-3)
+}
+
+Rules:
+- "z가 최대/최소", "높이가 최대/최소" => axis="z" + mark_max/min
+- "x가 최대/최소" => axis="x"
+- "y가 최대/최소" => axis="y"
+- "축/axis"가 언급되지 않으면 axis="z"
+- "가장 가까운 점 / 원점에 가장 가까운" => closest_to_point (point omitted => origin)
+- "t=..." 또는 "t에서 점" => slice_t with args.t
+- "접선 / tangent" => tangent_at with args.t
+- "교점/교차점"은 typed vs fit(=base) 간 axis 교차로 해석 => mark_intersections
+
+Defaults:
+- args.axis="z"
+- args.samples=800
+- args.maxRoots=12
+- args.maxIntersections=12
+- args.point=(0,0,0) if missing
+`.trim()
+    );
+  }
+
+  // surface3d / array3d
+  if (type === "surface3d" || type === "array3d") {
+    return (
+      common +
+      `
+
+Allowed actions (Surface3D z=f(x,y)):
+- none | mark_max | mark_min | mark_roots | clear_markers
+- contour_z | slice_x | slice_y | closest_to_point
+
+Args:
+{
+  "samplesX"?: number,          // default: 80
+  "samplesY"?: number,          // default: 80
+  "maxRoots"?: number,          // default: 12
+  "eps"?: number,               // root/contour tolerance (default: 1e-2)
+  "dedupDist"?: number,         // default: 0.25
+
+  "level"?: number,             // for contour_z (z=level). default: 0
+  "x"?: number,                 // for slice_x
+  "y"?: number,                 // for slice_y
+
+  "point"?: { "x": number, "y": number, "z": number } // for closest_to_point (default: origin)
+}
+
+Rules:
+- "최대/최소" => mark_max/min (z 기준)
+- "z=0/등고선/contour" => contour_z with level (default 0)
+- "x=... 단면/자르기" => slice_x with args.x
+- "y=... 단면/자르기" => slice_y with args.y
+- "가장 가까운 점 / 원점에 가장 가까운" => closest_to_point
+
+Defaults:
+- args.samplesX=80, args.samplesY=80
+- args.level=0
+- args.point=(0,0,0) if missing
+`.trim()
+    );
+  }
+
+  // fallback (unknown tab type)
+  return (
+    common +
+    `
+
+Allowed actions:
+- none | clear_markers
+
+If user asks to clear markers => clear_markers, else => none.
+`.trim()
+  );
 }
 
 export default function AIPanel({
@@ -379,32 +552,9 @@ export default function AIPanel({
     const messages = [
       {
         role: "developer",
-        content: `
-You are GraphMind Command Extractor.
-Return ONLY ONE JSON object. No markdown. No commentary.
-
-Schema:
-{
-  "action": "none|mark_max|mark_min|mark_roots|mark_intersections|clear_markers",
-  "target": "typed|fit",
-  "args": { "samples"?: number, "maxCount"?: number, "tol"?: number },
-  "message": "Korean short status message"
-}
-
-Rules:
-- "최대값/최댓값" => action=mark_max
-- "최소값/최솟값" => action=mark_min
-- "근/영점/zero/roots" => action=mark_roots
-- "교점/교차점/intersection" => action=mark_intersections
-- "지워/삭제/클리어" => action=clear_markers
-- If unclear => action=none and message asks for clarification
-
-Defaults:
-- target="typed"
-- args.samples=2500 for max/min
-- args.maxCount=8 for roots/intersections
-- args.tol=1e-6
-        `.trim(),
+        content: buildControlExtractorPrompt(
+          debouncedContext || currentContext
+        ),
       },
       { role: "user", content: prefix + "UserRequest:\n" + inputText },
     ];

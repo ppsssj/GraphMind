@@ -92,17 +92,6 @@ export default function Toolbar({
             Resample
           </button>
         </div>
-
-        <div className="toolbar-section">
-          <button
-            className="toolbar-btn ghost"
-            type="button"
-            onClick={onToggleLeftPanel}
-            title={showLeftPanel ? "LeftPanel 숨기기" : "LeftPanel 보이기"}
-          >
-            {showLeftPanel ? "Hide Left" : "Show Left"}
-          </button>
-        </div>
       </div>
 
       {/* Row 2 */}
@@ -142,7 +131,6 @@ export default function Toolbar({
             <option value={5}>×5</option>
             <option value={10}>×10</option>
           </select>
-
 
           <button
             className="toolbar-btn ghost"

@@ -102,8 +102,7 @@ const surface3DSnapshotChanged = (a, b) => {
   for (let i = 0; i < am.length; i++) {
     const p = am[i] || {};
     const q = bm[i] || {};
-    if (p.id !== q.id || p.x !== q.x || p.y !== q.y || p.z !== q.z)
-      return true;
+    if (p.id !== q.id || p.x !== q.x || p.y !== q.y || p.z !== q.z) return true;
   }
   return false;
 };
@@ -124,7 +123,6 @@ const isSurface3DCommitPatch = (patch) => {
   if (!patch || typeof patch !== "object") return false;
   return "expr" in patch;
 };
-
 
 function fitPolyCoeffs(xs, ys, degree) {
   const V = xs.map((x) => {
@@ -152,6 +150,285 @@ const coeffsToFn = (coeffs) => (x) => {
   }
   return y;
 };
+
+// ── AI Command helpers (Curve3D / Surface3D) ─────────────────────────────────
+function aiMakeParamFn(expr, paramName = "t") {
+  if (!expr) return () => 0;
+  const rhs = String(expr).includes("=") ? String(expr).split("=").pop() : expr;
+  const trimmed = String(rhs ?? "").trim() || "0";
+
+  let compiled;
+  try {
+    compiled = math.parse(trimmed).compile();
+  } catch (e) {
+    console.warn("[AICommand] Curve3D parse failed:", expr, e);
+    return () => 0;
+  }
+
+  return (t) => {
+    try {
+      const v = compiled.evaluate({
+        [paramName]: t,
+        t,
+        pi: Math.PI,
+        e: Math.E,
+      });
+      const n = typeof v === "number" ? v : Number(v?.valueOf?.());
+      return Number.isFinite(n) ? n : 0;
+    } catch {
+      return 0;
+    }
+  };
+}
+
+function aiBuildKernelDeformExpr(deltas, sigma) {
+  const s = Math.max(1e-6, Number(sigma) || 0.6);
+  const eps = 1e-9;
+  const wExpr = (ti) => `exp(-(((t)-(${ti}))/(${s}))^2)`;
+
+  const numTerms = [];
+  const denTerms = [];
+  for (const d of deltas || []) {
+    const ti = Number(d.t);
+    const di = Number(d.delta);
+    if (!Number.isFinite(ti) || !Number.isFinite(di)) continue;
+    if (Math.abs(di) < 1e-12) continue;
+    const wi = wExpr(ti);
+    numTerms.push(`((${di})*(${wi}))`);
+    denTerms.push(`(${wi})`);
+  }
+  if (!numTerms.length) return "0";
+  const num = numTerms.join(" + ");
+  const den = denTerms.length ? `${denTerms.join(" + ")} + (${eps})` : `${eps}`;
+  return `((${num})/(${den}))`;
+}
+
+function aiFitCurve3DFromMarkers({
+  markers,
+  baseXExpr,
+  baseYExpr,
+  baseZExpr,
+  deformSigma,
+}) {
+  const ms = Array.isArray(markers) ? markers : [];
+  const tPoints = ms.filter(
+    (m) => typeof m?.t === "number" && Number.isFinite(m.t)
+  );
+  if (tPoints.length < 2) return null;
+
+  const xt = aiMakeParamFn(baseXExpr ?? "0", "t");
+  const yt = aiMakeParamFn(baseYExpr ?? "0", "t");
+  const zt = aiMakeParamFn(baseZExpr ?? "0", "t");
+
+  const dx = [];
+  const dy = [];
+  const dz = [];
+  for (const m of tPoints) {
+    const t = Number(m.t);
+    const bx = xt(t);
+    const by = yt(t);
+    const bz = zt(t);
+    if (![bx, by, bz].every(Number.isFinite)) continue;
+    dx.push({ t, delta: Number(m.x) - bx });
+    dy.push({ t, delta: Number(m.y) - by });
+    dz.push({ t, delta: Number(m.z) - bz });
+  }
+
+  const baseX = String(baseXExpr ?? "0").trim() || "0";
+  const baseY = String(baseYExpr ?? "0").trim() || "0";
+  const baseZ = String(baseZExpr ?? "0").trim() || "0";
+
+  const newXExpr = `((${baseX}) + (${aiBuildKernelDeformExpr(
+    dx,
+    deformSigma
+  )}))`;
+  const newYExpr = `((${baseY}) + (${aiBuildKernelDeformExpr(
+    dy,
+    deformSigma
+  )}))`;
+  const newZExpr = `((${baseZ}) + (${aiBuildKernelDeformExpr(
+    dz,
+    deformSigma
+  )}))`;
+  return { xExpr: newXExpr, yExpr: newYExpr, zExpr: newZExpr };
+}
+
+function aiStripEq(expr) {
+  const s = String(expr ?? "");
+  return s.includes("=") ? s.split("=").pop().trim() : s.trim();
+}
+
+function aiMakeScalarFn2D(expr) {
+  const rhs = aiStripEq(expr || "0") || "0";
+  try {
+    const compiled = math.compile(rhs);
+    return (x, y) => {
+      try {
+        const v = compiled.evaluate({ x, y });
+        const num = Number(v);
+        return Number.isFinite(num) ? num : 0;
+      } catch {
+        return 0;
+      }
+    };
+  } catch {
+    return () => 0;
+  }
+}
+
+function aiFmtCoef(x) {
+  if (!Number.isFinite(x)) return "0";
+  const s = x.toFixed(6);
+  return s.replace(/\.?0+$/, "");
+}
+
+function aiBuildPolyExpr2D(terms) {
+  const parts = [];
+  for (const t of terms || []) {
+    const c = t.coef;
+    if (!Number.isFinite(c) || Math.abs(c) < 1e-10) continue;
+    const sign = c >= 0 ? "+" : "-";
+    const abs = Math.abs(c);
+    const coefStr = aiFmtCoef(abs);
+    const factors = [];
+    if (!(abs === 1 && (t.i !== 0 || t.j !== 0))) factors.push(coefStr);
+    if (t.i > 0) factors.push(t.i === 1 ? "x" : `x^${t.i}`);
+    if (t.j > 0) factors.push(t.j === 1 ? "y" : `y^${t.j}`);
+    const body = factors.length ? factors.join("*") : "0";
+    parts.push({ sign, body });
+  }
+  if (!parts.length) return "0";
+  let expr = `${parts[0].sign === "-" ? "-" : ""}${parts[0].body}`;
+  for (let k = 1; k < parts.length; k++)
+    expr += ` ${parts[k].sign} ${parts[k].body}`;
+  return expr;
+}
+
+function aiFitSurfaceDeltaPolynomial(
+  markers,
+  degree,
+  baseFn,
+  domain,
+  opts = {}
+) {
+  const d = Math.max(1, Math.min(6, Math.floor(Number(degree) || 2)));
+  const base = typeof baseFn === "function" ? baseFn : () => 0;
+
+  const markerWeight = Number.isFinite(opts.markerWeight)
+    ? opts.markerWeight
+    : 1.0;
+  const anchorWeight = Number.isFinite(opts.anchorWeight)
+    ? opts.anchorWeight
+    : 0.25;
+  const lambda = Number.isFinite(opts.lambda) ? opts.lambda : 1e-4;
+  const anchorGrid = Math.max(
+    3,
+    Math.min(20, Math.floor(opts.anchorGrid ?? 10))
+  );
+
+  const pts = (Array.isArray(markers) ? markers : [])
+    .map((m) => ({ x: Number(m?.x), y: Number(m?.y), z: Number(m?.z) }))
+    .filter((p) => [p.x, p.y].every(Number.isFinite) && Number.isFinite(p.z));
+
+  if (pts.length < 1) return { ok: false, reason: "points 부족" };
+
+  const basis = [];
+  for (let i = 0; i <= d; i++) {
+    for (let j = 0; j <= d - i; j++) basis.push({ i, j });
+  }
+  const M = basis.length;
+
+  const rows = [];
+  for (const p of pts) {
+    const r = p.z - base(p.x, p.y);
+    rows.push({ x: p.x, y: p.y, r, w: markerWeight });
+  }
+
+  if (
+    domain &&
+    Number.isFinite(domain.xMin) &&
+    Number.isFinite(domain.xMax) &&
+    Number.isFinite(domain.yMin) &&
+    Number.isFinite(domain.yMax)
+  ) {
+    const xmin = domain.xMin,
+      xmax = domain.xMax,
+      ymin = domain.yMin,
+      ymax = domain.yMax;
+    for (let iy = 0; iy < anchorGrid; iy++) {
+      const ty = anchorGrid === 1 ? 0.5 : iy / (anchorGrid - 1);
+      const y = ymin + (ymax - ymin) * ty;
+      for (let ix = 0; ix < anchorGrid; ix++) {
+        const tx = anchorGrid === 1 ? 0.5 : ix / (anchorGrid - 1);
+        const x = xmin + (xmax - xmin) * tx;
+        rows.push({ x, y, r: 0, w: anchorWeight });
+      }
+    }
+  }
+
+  const N = rows.length;
+  const A = math.zeros(N, M);
+  const R = math.zeros(N, 1);
+  const W = math.zeros(N, N);
+
+  for (let r = 0; r < N; r++) {
+    const { x, y, r: rr, w } = rows[r];
+    R.set([r, 0], rr);
+    W.set([r, r], Math.max(1e-8, w));
+    for (let c = 0; c < M; c++) {
+      const { i, j } = basis[c];
+      A.set([r, c], Math.pow(x, i) * Math.pow(y, j));
+    }
+  }
+
+  const AT = math.transpose(A);
+  const ATW = math.multiply(AT, W);
+  const ATWA = math.multiply(ATW, A);
+  const ATWR = math.multiply(ATW, R);
+  const I = math.identity(M);
+  const ATWAreg = math.add(ATWA, math.multiply(lambda, I));
+
+  let wSol;
+  try {
+    wSol = math.lusolve(ATWAreg, ATWR);
+  } catch {
+    return { ok: false, reason: "solve 실패" };
+  }
+
+  const terms = basis.map((b, idx) => ({
+    i: b.i,
+    j: b.j,
+    coef: Number(wSol.get([idx, 0])),
+  }));
+  const deltaExpr = aiBuildPolyExpr2D(terms);
+  return { ok: true, deltaExpr, degree: d };
+}
+
+function aiSampleSurfaceExtremum(fn, domain, nx = 60, ny = 60, mode = "max") {
+  if (!fn || !domain) return null;
+  const xMin = Number(domain.xMin),
+    xMax = Number(domain.xMax),
+    yMin = Number(domain.yMin),
+    yMax = Number(domain.yMax);
+  if (![xMin, xMax, yMin, yMax].every(Number.isFinite)) return null;
+
+  const sx = Math.max(2, Math.floor(nx));
+  const sy = Math.max(2, Math.floor(ny));
+  let best = null;
+  for (let iy = 0; iy < sy; iy++) {
+    const ty = sy === 1 ? 0.5 : iy / (sy - 1);
+    const y = yMin + (yMax - yMin) * ty;
+    for (let ix = 0; ix < sx; ix++) {
+      const tx = sx === 1 ? 0.5 : ix / (sx - 1);
+      const x = xMin + (xMax - xMin) * tx;
+      const z = fn(x, y);
+      if (!Number.isFinite(z)) continue;
+      if (!best) best = { x, y, z };
+      else if (mode === "max" ? z > best.z : z < best.z) best = { x, y, z };
+    }
+  }
+  return best;
+}
 
 // ── rule-based editing (keep formula family, update only parameters) ────────────
 const isFiniteNum = (v) => Number.isFinite(v);
@@ -603,11 +880,17 @@ export default function Studio() {
           nx: location.state?.surface3d?.nx ?? location.state?.nx ?? 80,
           ny: location.state?.surface3d?.ny ?? location.state?.ny ?? 80,
           gridMode:
-            location.state?.surface3d?.gridMode ?? location.state?.gridMode ?? "major",
+            location.state?.surface3d?.gridMode ??
+            location.state?.gridMode ??
+            "major",
           gridStep:
-            location.state?.surface3d?.gridStep ?? location.state?.gridStep ?? 1,
+            location.state?.surface3d?.gridStep ??
+            location.state?.gridStep ??
+            1,
           minorDiv:
-            location.state?.surface3d?.minorDiv ?? location.state?.minorDiv ?? 4,
+            location.state?.surface3d?.minorDiv ??
+            location.state?.minorDiv ??
+            4,
         }
       : undefined;
 
@@ -709,201 +992,214 @@ export default function Studio() {
 
   // equation state is stored per-tab in tabState (SSOT)
 
-// ── Undo/Redo for equation-point (node) moves: per-tab history ─────────────
-const tabStateRef = useRef(null);
-const tabsRef = useRef(null);
-const historyByTabRef = useRef({});
-const dragTxnRef = useRef(null);
+  // ── Undo/Redo for equation-point (node) moves: per-tab history ─────────────
+  const tabStateRef = useRef(null);
+  const tabsRef = useRef(null);
+  const historyByTabRef = useRef({});
+  const dragTxnRef = useRef(null);
 
-useEffect(() => {
-  tabStateRef.current = tabState;
-}, [tabState]);
+  useEffect(() => {
+    tabStateRef.current = tabState;
+  }, [tabState]);
 
-useEffect(() => {
-  tabsRef.current = tabs;
-}, [tabs]);
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
 
-const ensureHistory = useCallback((tabId) => {
-  const map = historyByTabRef.current;
-  if (!map[tabId]) map[tabId] = { undo: [], redo: [] };
-  return map[tabId];
-}, []);
+  const ensureHistory = useCallback((tabId) => {
+    const map = historyByTabRef.current;
+    if (!map[tabId]) map[tabId] = { undo: [], redo: [] };
+    return map[tabId];
+  }, []);
 
-
-const beginMoveTxn = useCallback((tabId) => {
-  if (!tabId) return;
-  const cur = tabStateRef.current?.[tabId];
-  if (!cur || cur.type !== "equation") return;
-  if (
-    dragTxnRef.current &&
-    dragTxnRef.current.tabId === tabId &&
-    dragTxnRef.current.kind === "equation"
-  )
-    return;
-
-  dragTxnRef.current = {
-    tabId,
-    kind: "equation",
-    before: {
-      equation: cur.equation,
-      points: cur.points.map((p) => ({ ...p })),
-    },
-    vaultId: cur.vaultId ?? null,
-  };
-}, []);
-
-const beginCurve3DTxn = useCallback((tabId) => {
-  if (!tabId) return;
-  const cur = tabStateRef.current?.[tabId];
-  if (!cur || cur.type !== "curve3d") return;
-  if (
-    dragTxnRef.current &&
-    dragTxnRef.current.tabId === tabId &&
-    dragTxnRef.current.kind === "curve3d"
-  )
-    return;
-
-  dragTxnRef.current = {
-    tabId,
-    kind: "curve3d",
-    before: {
-      curve3d: cloneCurve3D(cur.curve3d),
-    },
-    vaultId: cur.vaultId ?? null,
-  };
-}, []);
-
-const beginSurface3DTxn = useCallback((tabId) => {
-  if (!tabId) return;
-  const cur = tabStateRef.current?.[tabId];
-  if (!cur || cur.type !== "surface3d") return;
-  if (
-    dragTxnRef.current &&
-    dragTxnRef.current.tabId === tabId &&
-    dragTxnRef.current.kind === "surface3d"
-  )
-    return;
-
-  dragTxnRef.current = {
-    tabId,
-    kind: "surface3d",
-    before: {
-      surface3d: cloneSurface3D(cur.surface3d),
-    },
-    vaultId: cur.vaultId ?? null,
-  };
-}, []);
-
-const finalizeMoveTxn = useCallback(
-  (tabId) => {
-    const txn = dragTxnRef.current;
-    if (!txn || txn.tabId !== tabId) return;
-
+  const beginMoveTxn = useCallback((tabId) => {
+    if (!tabId) return;
     const cur = tabStateRef.current?.[tabId];
-    if (!cur) {
-      dragTxnRef.current = null;
+    if (!cur || cur.type !== "equation") return;
+    if (
+      dragTxnRef.current &&
+      dragTxnRef.current.tabId === tabId &&
+      dragTxnRef.current.kind === "equation"
+    )
       return;
-    }
 
-    const kind = txn.kind ?? cur.type;
-    const before = txn.before;
-
-    if (kind === "equation") {
-      if (cur.type !== "equation") {
-        dragTxnRef.current = null;
-        return;
-      }
-
-      const after = {
+    dragTxnRef.current = {
+      tabId,
+      kind: "equation",
+      before: {
         equation: cur.equation,
         points: cur.points.map((p) => ({ ...p })),
-      };
+      },
+      vaultId: cur.vaultId ?? null,
+    };
+  }, []);
 
-      const changedEq = before.equation !== after.equation;
-      const changedPts =
-        before.points.length !== after.points.length ||
-        before.points.some((p, i) => {
-          const q = after.points[i];
-          return !q || p.x !== q.x || p.y !== q.y;
-        });
-
-      if (changedEq || changedPts) {
-        const hist = ensureHistory(tabId);
-        hist.undo.push({ kind: "equation", before, after, vaultId: txn.vaultId });
-        hist.redo.length = 0;
-      }
-
-      dragTxnRef.current = null;
+  const beginCurve3DTxn = useCallback((tabId) => {
+    if (!tabId) return;
+    const cur = tabStateRef.current?.[tabId];
+    if (!cur || cur.type !== "curve3d") return;
+    if (
+      dragTxnRef.current &&
+      dragTxnRef.current.tabId === tabId &&
+      dragTxnRef.current.kind === "curve3d"
+    )
       return;
-    }
 
-    if (kind === "curve3d") {
-      if (cur.type !== "curve3d") {
+    dragTxnRef.current = {
+      tabId,
+      kind: "curve3d",
+      before: {
+        curve3d: cloneCurve3D(cur.curve3d),
+      },
+      vaultId: cur.vaultId ?? null,
+    };
+  }, []);
+
+  const beginSurface3DTxn = useCallback((tabId) => {
+    if (!tabId) return;
+    const cur = tabStateRef.current?.[tabId];
+    if (!cur || cur.type !== "surface3d") return;
+    if (
+      dragTxnRef.current &&
+      dragTxnRef.current.tabId === tabId &&
+      dragTxnRef.current.kind === "surface3d"
+    )
+      return;
+
+    dragTxnRef.current = {
+      tabId,
+      kind: "surface3d",
+      before: {
+        surface3d: cloneSurface3D(cur.surface3d),
+      },
+      vaultId: cur.vaultId ?? null,
+    };
+  }, []);
+
+  const finalizeMoveTxn = useCallback(
+    (tabId) => {
+      const txn = dragTxnRef.current;
+      if (!txn || txn.tabId !== tabId) return;
+
+      const cur = tabStateRef.current?.[tabId];
+      if (!cur) {
         dragTxnRef.current = null;
         return;
       }
 
-      const after = { curve3d: cloneCurve3D(cur.curve3d) };
-      if (curve3DSnapshotChanged(before.curve3d, after.curve3d)) {
-        const hist = ensureHistory(tabId);
-        hist.undo.push({ kind: "curve3d", before, after, vaultId: txn.vaultId });
-        hist.redo.length = 0;
-      }
+      const kind = txn.kind ?? cur.type;
+      const before = txn.before;
 
-      dragTxnRef.current = null;
-      return;
-    }
+      if (kind === "equation") {
+        if (cur.type !== "equation") {
+          dragTxnRef.current = null;
+          return;
+        }
 
-    if (kind === "surface3d") {
-      if (cur.type !== "surface3d") {
+        const after = {
+          equation: cur.equation,
+          points: cur.points.map((p) => ({ ...p })),
+        };
+
+        const changedEq = before.equation !== after.equation;
+        const changedPts =
+          before.points.length !== after.points.length ||
+          before.points.some((p, i) => {
+            const q = after.points[i];
+            return !q || p.x !== q.x || p.y !== q.y;
+          });
+
+        if (changedEq || changedPts) {
+          const hist = ensureHistory(tabId);
+          hist.undo.push({
+            kind: "equation",
+            before,
+            after,
+            vaultId: txn.vaultId,
+          });
+          hist.redo.length = 0;
+        }
+
         dragTxnRef.current = null;
         return;
       }
 
-      const after = { surface3d: cloneSurface3D(cur.surface3d) };
-      if (surface3DSnapshotChanged(before.surface3d, after.surface3d)) {
-        const hist = ensureHistory(tabId);
-        hist.undo.push({ kind: "surface3d", before, after, vaultId: txn.vaultId });
-        hist.redo.length = 0;
+      if (kind === "curve3d") {
+        if (cur.type !== "curve3d") {
+          dragTxnRef.current = null;
+          return;
+        }
+
+        const after = { curve3d: cloneCurve3D(cur.curve3d) };
+        if (curve3DSnapshotChanged(before.curve3d, after.curve3d)) {
+          const hist = ensureHistory(tabId);
+          hist.undo.push({
+            kind: "curve3d",
+            before,
+            after,
+            vaultId: txn.vaultId,
+          });
+          hist.redo.length = 0;
+        }
+
+        dragTxnRef.current = null;
+        return;
       }
 
+      if (kind === "surface3d") {
+        if (cur.type !== "surface3d") {
+          dragTxnRef.current = null;
+          return;
+        }
+
+        const after = { surface3d: cloneSurface3D(cur.surface3d) };
+        if (surface3DSnapshotChanged(before.surface3d, after.surface3d)) {
+          const hist = ensureHistory(tabId);
+          hist.undo.push({
+            kind: "surface3d",
+            before,
+            after,
+            vaultId: txn.vaultId,
+          });
+          hist.redo.length = 0;
+        }
+
+        dragTxnRef.current = null;
+        return;
+      }
+
+      // unknown kind
       dragTxnRef.current = null;
-      return;
-    }
+    },
+    [ensureHistory]
+  );
 
-    // unknown kind
-    dragTxnRef.current = null;
-  },
-  [ensureHistory]
-);
+  const scheduleFinalizeMoveTxn = useCallback(
+    (tabId) => {
+      requestAnimationFrame(() => finalizeMoveTxn(tabId));
+    },
+    [finalizeMoveTxn]
+  );
 
-const scheduleFinalizeMoveTxn = useCallback(
-  (tabId) => {
-    requestAnimationFrame(() => finalizeMoveTxn(tabId));
-  },
-  [finalizeMoveTxn]
-);
+  useEffect(() => {
+    const onMouseUp = () => {
+      const txn = dragTxnRef.current;
+      if (!txn?.tabId) return;
 
-useEffect(() => {
-  const onMouseUp = () => {
-    const txn = dragTxnRef.current;
-    if (!txn?.tabId) return;
+      // equation: commit immediately on mouseup
+      if (txn.kind === "equation") {
+        scheduleFinalizeMoveTxn(txn.tabId);
+        return;
+      }
 
-    // equation: commit immediately on mouseup
-    if (txn.kind === "equation") {
-      scheduleFinalizeMoveTxn(txn.tabId);
-      return;
-    }
+      // curve3d/surface3d: drag-end commit patch may arrive a bit later
+      const tabId = txn.tabId;
+      window.setTimeout(() => finalizeMoveTxn(tabId), 120);
+    };
 
-    // curve3d/surface3d: drag-end commit patch may arrive a bit later
-    const tabId = txn.tabId;
-    window.setTimeout(() => finalizeMoveTxn(tabId), 120);
-  };
-
-  window.addEventListener("mouseup", onMouseUp);
-  return () => window.removeEventListener("mouseup", onMouseUp);
-}, [finalizeMoveTxn, scheduleFinalizeMoveTxn]);
-
+    window.addEventListener("mouseup", onMouseUp);
+    return () => window.removeEventListener("mouseup", onMouseUp);
+  }, [finalizeMoveTxn, scheduleFinalizeMoveTxn]);
 
   // ── 탭에서 poly-fit 파생 데이터 ────────────────────────
   // ✅ Vault localStorage + state 안 수식 업데이트
@@ -928,142 +1224,141 @@ useEffect(() => {
     });
   }, []);
 
+  const applySnapshotToTab = useCallback(
+    (tabId, snap, kind, vaultIdForUpdate) => {
+      if (!tabId || !snap) return;
 
-const applySnapshotToTab = useCallback(
-  (tabId, snap, kind, vaultIdForUpdate) => {
-    if (!tabId || !snap) return;
+      setTabState((st) => {
+        const cur = st[tabId];
+        if (!cur) return st;
 
-    setTabState((st) => {
-      const cur = st[tabId];
-      if (!cur) return st;
+        const k = kind ?? cur.type ?? "equation";
 
-      const k = kind ?? cur.type ?? "equation";
+        if (k === "equation" && cur.type === "equation") {
+          return {
+            ...st,
+            [tabId]: {
+              ...cur,
+              equation: normalizeFormula(snap.equation),
+              points: (snap.points || []).map((p) => ({ ...p })),
+              ruleError: null,
+              ver: (cur.ver ?? 0) + 1,
+            },
+          };
+        }
 
-      if (k === "equation" && cur.type === "equation") {
-        return {
-          ...st,
-          [tabId]: {
-            ...cur,
-            equation: normalizeFormula(snap.equation),
-            points: (snap.points || []).map((p) => ({ ...p })),
-            ruleError: null,
-            ver: (cur.ver ?? 0) + 1,
-          },
-        };
-      }
+        if (k === "curve3d" && cur.type === "curve3d") {
+          const nextCurve3d = cloneCurve3D(snap.curve3d ?? snap);
+          return {
+            ...st,
+            [tabId]: {
+              ...cur,
+              curve3d: { ...(cur.curve3d || {}), ...nextCurve3d },
+              ver: (cur.ver ?? 0) + 1,
+            },
+          };
+        }
 
-      if (k === "curve3d" && cur.type === "curve3d") {
-        const nextCurve3d = cloneCurve3D(snap.curve3d ?? snap);
-        return {
-          ...st,
-          [tabId]: {
-            ...cur,
-            curve3d: { ...(cur.curve3d || {}), ...nextCurve3d },
-            ver: (cur.ver ?? 0) + 1,
-          },
-        };
-      }
+        if (k === "surface3d" && cur.type === "surface3d") {
+          const nextSurface3d = cloneSurface3D(snap.surface3d ?? snap);
+          return {
+            ...st,
+            [tabId]: {
+              ...cur,
+              surface3d: { ...(cur.surface3d || {}), ...nextSurface3d },
+              ver: (cur.ver ?? 0) + 1,
+            },
+          };
+        }
 
-      if (k === "surface3d" && cur.type === "surface3d") {
-        const nextSurface3d = cloneSurface3D(snap.surface3d ?? snap);
-        return {
-          ...st,
-          [tabId]: {
-            ...cur,
-            surface3d: { ...(cur.surface3d || {}), ...nextSurface3d },
-            ver: (cur.ver ?? 0) + 1,
-          },
-        };
-      }
-
-      return st;
-    });
-
-    // equation 전용: 상단 입력/탭 제목/Vault 동기화
-    if ((kind ?? "equation") === "equation") {
-      const normEq = normalizeFormula(snap.equation);
-      setTabs((t) => {
-        const prev = t.byId?.[tabId];
-        if (!prev) return t;
-        return {
-          ...t,
-          byId: {
-            ...t.byId,
-            [tabId]: { ...prev, title: titleFromFormula(normEq) },
-          },
-        };
+        return st;
       });
 
-      if (vaultIdForUpdate) updateVaultFormula(vaultIdForUpdate, normEq);
-    }
-  },
-  [updateVaultFormula]
-);
-const undoMove = useCallback(() => {
-  const tabId = panes?.[focusedPane]?.activeId;
-  if (!tabId) return;
+      // equation 전용: 상단 입력/탭 제목/Vault 동기화
+      if ((kind ?? "equation") === "equation") {
+        const normEq = normalizeFormula(snap.equation);
+        setTabs((t) => {
+          const prev = t.byId?.[tabId];
+          if (!prev) return t;
+          return {
+            ...t,
+            byId: {
+              ...t.byId,
+              [tabId]: { ...prev, title: titleFromFormula(normEq) },
+            },
+          };
+        });
 
-  const cur = tabStateRef.current?.[tabId];
-  if (!cur) return;
+        if (vaultIdForUpdate) updateVaultFormula(vaultIdForUpdate, normEq);
+      }
+    },
+    [updateVaultFormula]
+  );
+  const undoMove = useCallback(() => {
+    const tabId = panes?.[focusedPane]?.activeId;
+    if (!tabId) return;
 
-  // cancel pending txn
-  dragTxnRef.current = null;
+    const cur = tabStateRef.current?.[tabId];
+    if (!cur) return;
 
-  const hist = ensureHistory(tabId);
-  const entry = hist.undo.pop();
-  if (!entry) return;
+    // cancel pending txn
+    dragTxnRef.current = null;
 
-  hist.redo.push(entry);
+    const hist = ensureHistory(tabId);
+    const entry = hist.undo.pop();
+    if (!entry) return;
 
-  const kind = entry.kind ?? cur.type ?? "equation";
-  applySnapshotToTab(tabId, entry.before, kind, entry.vaultId ?? cur.vaultId);
-}, [applySnapshotToTab, ensureHistory, focusedPane, panes]);
+    hist.redo.push(entry);
 
-const redoMove = useCallback(() => {
-  const tabId = panes?.[focusedPane]?.activeId;
-  if (!tabId) return;
+    const kind = entry.kind ?? cur.type ?? "equation";
+    applySnapshotToTab(tabId, entry.before, kind, entry.vaultId ?? cur.vaultId);
+  }, [applySnapshotToTab, ensureHistory, focusedPane, panes]);
 
-  const cur = tabStateRef.current?.[tabId];
-  if (!cur) return;
+  const redoMove = useCallback(() => {
+    const tabId = panes?.[focusedPane]?.activeId;
+    if (!tabId) return;
 
-  // cancel pending txn
-  dragTxnRef.current = null;
+    const cur = tabStateRef.current?.[tabId];
+    if (!cur) return;
 
-  const hist = ensureHistory(tabId);
-  const entry = hist.redo.pop();
-  if (!entry) return;
+    // cancel pending txn
+    dragTxnRef.current = null;
 
-  hist.undo.push(entry);
+    const hist = ensureHistory(tabId);
+    const entry = hist.redo.pop();
+    if (!entry) return;
 
-  const kind = entry.kind ?? cur.type ?? "equation";
-  applySnapshotToTab(tabId, entry.after, kind, entry.vaultId ?? cur.vaultId);
-}, [applySnapshotToTab, ensureHistory, focusedPane, panes]);
+    hist.undo.push(entry);
 
-useEffect(() => {
-  const onKeyDown = (e) => {
-    // Ignore when typing in inputs/textareas/contenteditable
-    const el = document.activeElement;
-    const tag = el?.tagName?.toLowerCase?.();
-    if (tag === "input" || tag === "textarea" || el?.isContentEditable) return;
+    const kind = entry.kind ?? cur.type ?? "equation";
+    applySnapshotToTab(tabId, entry.after, kind, entry.vaultId ?? cur.vaultId);
+  }, [applySnapshotToTab, ensureHistory, focusedPane, panes]);
 
-    const isMac = navigator.platform?.toUpperCase?.().includes("MAC");
-    const mod = isMac ? e.metaKey : e.ctrlKey;
-    if (!mod) return;
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      // Ignore when typing in inputs/textareas/contenteditable
+      const el = document.activeElement;
+      const tag = el?.tagName?.toLowerCase?.();
+      if (tag === "input" || tag === "textarea" || el?.isContentEditable)
+        return;
 
-    const k = String(e.key || "").toLowerCase();
-    if (k === "z" && !e.shiftKey) {
-      e.preventDefault();
-      undoMove();
-    } else if ((k === "z" && e.shiftKey) || k === "y") {
-      e.preventDefault();
-      redoMove();
-    }
-  };
+      const isMac = navigator.platform?.toUpperCase?.().includes("MAC");
+      const mod = isMac ? e.metaKey : e.ctrlKey;
+      if (!mod) return;
 
-  window.addEventListener("keydown", onKeyDown);
-  return () => window.removeEventListener("keydown", onKeyDown);
-}, [undoMove, redoMove]);
+      const k = String(e.key || "").toLowerCase();
+      if (k === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undoMove();
+      } else if ((k === "z" && e.shiftKey) || k === "y") {
+        e.preventDefault();
+        redoMove();
+      }
+    };
 
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [undoMove, redoMove]);
 
   const deriveFor = useCallback(
     (tabId) => {
@@ -1171,12 +1466,14 @@ useEffect(() => {
             [tabId]: { ...st[tabId], gridStep: Math.max(0.1, Number(v) || 2) },
           })),
 
-
         minorDiv: s.minorDiv ?? 4,
         setMinorDiv: (v) =>
           setTabState((st) => ({
             ...st,
-            [tabId]: { ...st[tabId], minorDiv: Math.max(1, Math.floor(Number(v) || 4)) },
+            [tabId]: {
+              ...st[tabId],
+              minorDiv: Math.max(1, Math.floor(Number(v) || 4)),
+            },
           })),
         gridMode: s.gridMode ?? "major",
         setGridMode: (mode) =>
@@ -1201,20 +1498,20 @@ useEffect(() => {
 
         points: s.points,
         curveKey: coeffs.map((c) => c.toFixed(6)).join("|") + `|v${s.ver ?? 0}`,
-        
-updatePoint: (idx, xy) => {
-  beginMoveTxn(tabId);
-  setTabState((st) => {
-    const cur = st[tabId];
-    const nextPts = cur.points.map((p, i) =>
-      i === idx ? { ...p, ...xy } : p
-    );
-    return {
-      ...st,
-      [tabId]: { ...cur, points: nextPts },
-    };
-  });
-},
+
+        updatePoint: (idx, xy) => {
+          beginMoveTxn(tabId);
+          setTabState((st) => {
+            const cur = st[tabId];
+            const nextPts = cur.points.map((p, i) =>
+              i === idx ? { ...p, ...xy } : p
+            );
+            return {
+              ...st,
+              [tabId]: { ...cur, points: nextPts },
+            };
+          });
+        },
         commitRule,
 
         // ✅ Canvas interactions (Alt+click add, right-click remove)
@@ -1250,7 +1547,8 @@ updatePoint: (idx, xy) => {
           if (!cur || cur.type !== "equation") return;
 
           const arr = Array.isArray(cur.points) ? cur.points : [];
-          const idx = typeof idxOrKey === "number" ? idxOrKey : Number(idxOrKey);
+          const idx =
+            typeof idxOrKey === "number" ? idxOrKey : Number(idxOrKey);
           if (!Number.isFinite(idx)) return;
 
           const nextPts = arr.filter((_, i) => i !== idx);
@@ -1404,6 +1702,17 @@ updatePoint: (idx, xy) => {
         return;
       }
 
+      // ── debug logger (toggle via localStorage: gm_ai_cmd_debug = "0" to disable)
+      const debugEnabled = (() => {
+        try {
+          const v = window?.localStorage?.getItem?.("gm_ai_cmd_debug");
+          if (v === "0" || v === "false") return false;
+        } catch {}
+        return true;
+      })();
+      const log = (...a) => debugEnabled && console.log("[AICommand]", ...a);
+      const warn = (...a) => debugEnabled && console.warn("[AICommand]", ...a);
+
       const paneKey =
         payload.pane === "left" || payload.pane === "right"
           ? payload.pane
@@ -1414,118 +1723,830 @@ updatePoint: (idx, xy) => {
         panes?.[paneKey]?.activeId ||
         panes?.[focusedPane]?.activeId;
 
-      if (!tabId) return;
-
-      const pack = deriveFor(tabId);
-      if (!pack) return;
-
-      const pickFn = (target) =>
-        target === "fit" ? pack.fittedFn : pack.typedFn;
-      const xmin = pack.xmin;
-      const xmax = pack.xmax;
-
-      const nextMarkers = [];
-
-      for (const c of commands) {
-        const action = c.action;
-        const target = c.target === "fit" ? "fit" : "typed";
-        const fn = pickFn(target);
-        const args = c.args ?? {};
-        const samples = Number(args.samples) || 2500;
-
-        if (action === "clear_markers") {
-          nextMarkers.length = 0;
-          continue;
-        }
-
-        if (action === "mark_max" || action === "find_max") {
-          const max = sampleExtremum(fn, xmin, xmax, samples, "max");
-          if (max) {
-            nextMarkers.push({
-              id: `max-${Date.now()}`,
-              kind: "max",
-              x: max.x,
-              y: max.y,
-              label: `max (${max.x.toFixed(2)}, ${max.y.toFixed(2)})`,
-            });
-          }
-          continue;
-        }
-
-        if (action === "mark_min" || action === "find_min") {
-          const min = sampleExtremum(fn, xmin, xmax, samples, "min");
-          if (min) {
-            nextMarkers.push({
-              id: `min-${Date.now()}`,
-              kind: "min",
-              x: min.x,
-              y: min.y,
-              label: `min (${min.x.toFixed(2)}, ${min.y.toFixed(2)})`,
-            });
-          }
-          continue;
-        }
-
-        if (action === "mark_roots" || action === "find_roots") {
-          const roots = findRoots(
-            fn,
-            xmin,
-            xmax,
-            samples,
-            Number(args.maxRoots) || 12
-          );
-          roots.forEach((r, idx) => {
-            const y = fn(r);
-            if (!Number.isFinite(y)) return;
-            nextMarkers.push({
-              id: `root-${Date.now()}-${idx}`,
-              kind: "root",
-              x: r,
-              y,
-              label: `root (${r.toFixed(2)}, ${y.toFixed(2)})`,
-            });
-          });
-          continue;
-        }
-
-        if (
-          action === "mark_intersections" ||
-          action === "find_intersections"
-        ) {
-          const other = target === "fit" ? pack.typedFn : pack.fittedFn;
-          const diff = (x) => fn(x) - other(x);
-          const xs = findRoots(
-            diff,
-            xmin,
-            xmax,
-            samples,
-            Number(args.maxIntersections) || 12
-          );
-          xs.forEach((x, idx) => {
-            const y = fn(x);
-            if (!Number.isFinite(y)) return;
-            nextMarkers.push({
-              id: `ix-${Date.now()}-${idx}`,
-              kind: "intersection",
-              x,
-              y,
-              label: `∩ (${x.toFixed(2)}, ${y.toFixed(2)})`,
-            });
-          });
-          continue;
-        }
+      if (!tabId) {
+        warn("no tabId", payload);
+        return;
       }
 
-      setTabState((st) => ({
-        ...st,
-        [tabId]: {
-          ...st[tabId],
-          markers: nextMarkers,
-          ver: (st[tabId].ver ?? 0) + 1,
-        },
-      }));
+      const tab = tabState?.[tabId];
+      if (!tab) {
+        warn("tab not found", tabId);
+        return;
+      }
+
+      log("incoming", { tabId, tabType: tab.type, paneKey, commands });
+
+      // ─────────────────────────────────────────────────────────────────────
+      // 1) 2D equation (GraphView)
+      // ─────────────────────────────────────────────────────────────────────
+      if (tab.type === "equation") {
+        const pack = deriveFor(tabId);
+        if (!pack) {
+          warn("deriveFor failed for equation tab", tabId);
+          return;
+        }
+
+        const pickFn = (target) =>
+          target === "fit" ? pack.fittedFn : pack.typedFn;
+        const xmin = pack.xmin;
+        const xmax = pack.xmax;
+        const nextMarkers = [];
+
+        for (const c of commands) {
+          const action = c.action;
+          const target = c.target === "fit" ? "fit" : "typed";
+          const fn = pickFn(target);
+          const args = c.args ?? {};
+          const samples = Number(args.samples) || 2500;
+
+          if (action === "clear_markers") {
+            nextMarkers.length = 0;
+            continue;
+          }
+
+          if (action === "mark_max" || action === "find_max") {
+            const max = sampleExtremum(fn, xmin, xmax, samples, "max");
+            if (max) {
+              nextMarkers.push({
+                id: `max-${Date.now()}`,
+                kind: "max",
+                x: max.x,
+                y: max.y,
+                label: `max (${max.x.toFixed(2)}, ${max.y.toFixed(2)})`,
+              });
+            }
+            continue;
+          }
+
+          if (action === "mark_min" || action === "find_min") {
+            const min = sampleExtremum(fn, xmin, xmax, samples, "min");
+            if (min) {
+              nextMarkers.push({
+                id: `min-${Date.now()}`,
+                kind: "min",
+                x: min.x,
+                y: min.y,
+                label: `min (${min.x.toFixed(2)}, ${min.y.toFixed(2)})`,
+              });
+            }
+            continue;
+          }
+
+          if (action === "mark_roots" || action === "find_roots") {
+            const roots = findRoots(
+              fn,
+              xmin,
+              xmax,
+              samples,
+              Number(args.maxRoots) || 12
+            );
+            roots.forEach((r, idx) => {
+              const y = fn(r);
+              if (!Number.isFinite(y)) return;
+              nextMarkers.push({
+                id: `root-${Date.now()}-${idx}`,
+                kind: "root",
+                x: r,
+                y,
+                label: `root (${r.toFixed(2)}, ${y.toFixed(2)})`,
+              });
+            });
+            continue;
+          }
+
+          if (
+            action === "mark_intersections" ||
+            action === "find_intersections"
+          ) {
+            const other = target === "fit" ? pack.typedFn : pack.fittedFn;
+            const diff = (x) => fn(x) - other(x);
+            const xs = findRoots(
+              diff,
+              xmin,
+              xmax,
+              samples,
+              Number(args.maxIntersections) || 12
+            );
+            xs.forEach((x, idx) => {
+              const y = fn(x);
+              if (!Number.isFinite(y)) return;
+              nextMarkers.push({
+                id: `ix-${Date.now()}-${idx}`,
+                kind: "intersection",
+                x,
+                y,
+                label: `∩ (${x.toFixed(2)}, ${y.toFixed(2)})`,
+              });
+            });
+            continue;
+          }
+
+          warn("unsupported action for equation", action);
+        }
+
+        setTabState((st) => ({
+          ...st,
+          [tabId]: {
+            ...st[tabId],
+            markers: nextMarkers,
+            ver: (st[tabId].ver ?? 0) + 1,
+          },
+        }));
+        log("equation markers applied", { tabId, count: nextMarkers.length });
+        return;
+      }
+
+      // ─────────────────────────────────────────────────────────────────────
+      // 2) Curve3D
+      // ─────────────────────────────────────────────────────────────────────
+      if (tab.type === "curve3d") {
+        const c3 = tab.curve3d || {};
+        const tMin = Number.isFinite(Number(c3.tMin)) ? Number(c3.tMin) : 0;
+        const tMax = Number.isFinite(Number(c3.tMax))
+          ? Number(c3.tMax)
+          : 2 * Math.PI;
+
+        // map AIPanel's "typed/fit" to Curve3D's "edited/base"
+        const pickExprSet = (target) => {
+          const isBase = target === "fit"; // fit -> base(회색)
+          return {
+            x: String(isBase ? c3.baseXExpr ?? c3.xExpr : c3.xExpr ?? "0"),
+            y: String(isBase ? c3.baseYExpr ?? c3.yExpr : c3.yExpr ?? "0"),
+            z: String(isBase ? c3.baseZExpr ?? c3.zExpr : c3.zExpr ?? "0"),
+          };
+        };
+
+        const nextMarkers = [];
+
+        const fmt = (v, d = 2) => {
+          const n = Number(v);
+          return Number.isFinite(n) ? n.toFixed(d) : "NaN";
+        };
+        const fmtXYZ = (x, y, z) => `(${fmt(x)}, ${fmt(y)}, ${fmt(z)})`;
+
+        for (const c of commands) {
+          const action = c.action;
+          const target = c.target === "fit" ? "fit" : "typed";
+          const args = c.args ?? {};
+          const samples = Math.max(64, Number(args.samples) || 800);
+          const axis = String(args.axis ?? "z").toLowerCase();
+          const maxRoots = Number(args.maxRoots) || 12;
+          const maxIntersections = Number(args.maxIntersections) || 12;
+
+          if (action === "clear_markers") {
+            nextMarkers.length = 0;
+            continue;
+          }
+
+          if (
+            action === "fit_from_markers" ||
+            action === "recalculate_from_markers"
+          ) {
+            // markers will be applied after the loop; fitting is done after that.
+            // This is intentionally handled below.
+            continue;
+          }
+
+          const exprs = pickExprSet(target);
+          const xt = aiMakeParamFn(exprs.x, "t");
+          const yt = aiMakeParamFn(exprs.y, "t");
+          const zt = aiMakeParamFn(exprs.z, "t");
+
+          const axisFn = (t) => {
+            if (axis === "x") return xt(t);
+            if (axis === "y") return yt(t);
+            return zt(t);
+          };
+
+          if (action === "mark_max" || action === "find_max") {
+            const max = sampleExtremum(axisFn, tMin, tMax, samples, "max");
+            if (max) {
+              const t = max.x;
+              const X = xt(t),
+                Y = yt(t),
+                Z = zt(t);
+              nextMarkers.push({
+                id: `c3-max-${Date.now()}`,
+                kind: "max",
+                t,
+                x: X,
+                y: Y,
+                z: Z,
+                label: `max(${axis}) ${fmtXYZ(X, Y, Z)}`,
+              });
+            }
+            continue;
+          }
+
+          if (action === "mark_min" || action === "find_min") {
+            const min = sampleExtremum(axisFn, tMin, tMax, samples, "min");
+            if (min) {
+              const t = min.x;
+              const X = xt(t),
+                Y = yt(t),
+                Z = zt(t);
+              nextMarkers.push({
+                id: `c3-min-${Date.now()}`,
+                kind: "min",
+                t,
+                x: X,
+                y: Y,
+                z: Z,
+                label: `min(${axis}) ${fmtXYZ(X, Y, Z)}`,
+              });
+            }
+            continue;
+          }
+
+          if (action === "mark_roots" || action === "find_roots") {
+            const roots = findRoots(axisFn, tMin, tMax, samples, maxRoots);
+            roots.forEach((t, idx) => {
+              const X = xt(t),
+                Y = yt(t),
+                Z = zt(t);
+              nextMarkers.push({
+                id: `c3-root-${Date.now()}-${idx}`,
+                kind: "root",
+                t,
+                x: X,
+                y: Y,
+                z: Z,
+                label: `root(${axis}) ${fmtXYZ(X, Y, Z)}`,
+              });
+            });
+            if (action === "slice_t") {
+              const t = Number(args.t);
+              if (!Number.isFinite(t)) {
+                warn("slice_t requires args.t (number)");
+                continue;
+              }
+              const X = xt(t),
+                Y = yt(t),
+                Z = zt(t);
+              nextMarkers.push({
+                id: `c3-slice-${Date.now()}`,
+                kind: "slice",
+                t,
+                x: X,
+                y: Y,
+                z: Z,
+                label: `t=${fmt(t, 3)} ${fmtXYZ(X, Y, Z)}`,
+              });
+              continue;
+            }
+
+            if (action === "tangent_at") {
+              const t0 = Number(args.t);
+              if (!Number.isFinite(t0)) {
+                warn("tangent_at requires args.t (number)");
+                continue;
+              }
+              const dt = Math.max(1e-6, Number(args.dt) || 1e-3);
+              const tA = Math.max(tMin, Math.min(tMax, t0 - dt));
+              const tB = Math.max(tMin, Math.min(tMax, t0 + dt));
+              const denom = Math.max(1e-12, tB - tA);
+              const dx = (xt(tB) - xt(tA)) / denom;
+              const dy = (yt(tB) - yt(tA)) / denom;
+              const dz = (zt(tB) - zt(tA)) / denom;
+              const X = xt(t0),
+                Y = yt(t0),
+                Z = zt(t0);
+              nextMarkers.push({
+                id: `c3-tan-${Date.now()}`,
+                kind: "tangent",
+                t: t0,
+                x: X,
+                y: Y,
+                z: Z,
+                label: `tangent @ t=${fmt(t0, 3)} dir=(${fmt(dx, 3)}, ${fmt(
+                  dy,
+                  3
+                )}, ${fmt(dz, 3)})`,
+              });
+              continue;
+            }
+
+            if (action === "closest_to_point") {
+              const p = (() => {
+                const raw = args.point;
+                if (raw && typeof raw === "object") {
+                  const px = Number(raw.x),
+                    py = Number(raw.y),
+                    pz = Number(raw.z);
+                  if ([px, py, pz].every(Number.isFinite))
+                    return { x: px, y: py, z: pz };
+                }
+                if (typeof raw === "string") {
+                  const parts = raw
+                    .split(/[, ]+/)
+                    .map((s) => Number(s))
+                    .filter(Number.isFinite);
+                  if (parts.length >= 3)
+                    return { x: parts[0], y: parts[1], z: parts[2] };
+                }
+                return { x: 0, y: 0, z: 0 };
+              })();
+
+              const dist2 = (t) => {
+                const dx = xt(t) - p.x;
+                const dy = yt(t) - p.y;
+                const dz = zt(t) - p.z;
+                return dx * dx + dy * dy + dz * dz;
+              };
+              const best = sampleExtremum(dist2, tMin, tMax, samples, "min");
+              if (best) {
+                const t = best.x;
+                const X = xt(t),
+                  Y = yt(t),
+                  Z = zt(t);
+                const d = Math.sqrt(Math.max(0, dist2(t)));
+                nextMarkers.push({
+                  id: `c3-close-${Date.now()}`,
+                  kind: "closest",
+                  t,
+                  x: X,
+                  y: Y,
+                  z: Z,
+                  label: `closest to (${fmt(p.x)}, ${fmt(p.y)}, ${fmt(
+                    p.z
+                  )}) d=${fmt(d, 3)} ${fmtXYZ(X, Y, Z)}`,
+                });
+              }
+              continue;
+            }
+
+            continue;
+          }
+
+          if (
+            action === "mark_intersections" ||
+            action === "find_intersections"
+          ) {
+            const otherExprs = pickExprSet(target === "fit" ? "typed" : "fit");
+            const oxt = aiMakeParamFn(otherExprs.x, "t");
+            const oyt = aiMakeParamFn(otherExprs.y, "t");
+            const ozt = aiMakeParamFn(otherExprs.z, "t");
+            const otherAxisFn = (t) => {
+              if (axis === "x") return oxt(t);
+              if (axis === "y") return oyt(t);
+              return ozt(t);
+            };
+
+            const diff = (t) => axisFn(t) - otherAxisFn(t);
+            const ts = findRoots(diff, tMin, tMax, samples, maxIntersections);
+            ts.forEach((t, idx) => {
+              const X = xt(t),
+                Y = yt(t),
+                Z = zt(t);
+              nextMarkers.push({
+                id: `c3-ix-${Date.now()}-${idx}`,
+                kind: "intersection",
+                t,
+                x: X,
+                y: Y,
+                z: Z,
+                label: `∩(${axis}) ${fmtXYZ(X, Y, Z)}`,
+              });
+            });
+            continue;
+          }
+
+          warn("unsupported action for curve3d", action);
+        }
+
+        // Apply markers first
+        updateCurve3D(tabId, { markers: nextMarkers });
+        log("curve3d markers applied", { tabId, count: nextMarkers.length });
+
+        // Optional: commit a new curve from markers (requires explicit action)
+        const wantsFit = commands.some(
+          (c) =>
+            c.action === "fit_from_markers" ||
+            c.action === "recalculate_from_markers"
+        );
+        if (wantsFit) {
+          const baseXExpr = c3.baseXExpr ?? c3.xExpr ?? "0";
+          const baseYExpr = c3.baseYExpr ?? c3.yExpr ?? "0";
+          const baseZExpr = c3.baseZExpr ?? c3.zExpr ?? "0";
+          const fitPatch = aiFitCurve3DFromMarkers({
+            markers: nextMarkers,
+            baseXExpr,
+            baseYExpr,
+            baseZExpr,
+            deformSigma: c3.deformSigma ?? 0.6,
+          });
+          if (fitPatch) {
+            updateCurve3D(tabId, fitPatch);
+            log("curve3d fit committed", {
+              tabId,
+              xExpr: fitPatch.xExpr,
+              yExpr: fitPatch.yExpr,
+              zExpr: fitPatch.zExpr,
+            });
+          } else {
+            warn("curve3d fit requested but insufficient markers");
+          }
+        }
+        return;
+      }
+
+      // ─────────────────────────────────────────────────────────────────────
+      // 3) Surface3D
+      // ─────────────────────────────────────────────────────────────────────
+      if (tab.type === "surface3d" || tab.type === "array3d") {
+        const s3 = tab.surface3d || {};
+        const domain = {
+          xMin: Number.isFinite(Number(s3.xMin)) ? Number(s3.xMin) : -5,
+          xMax: Number.isFinite(Number(s3.xMax)) ? Number(s3.xMax) : 5,
+          yMin: Number.isFinite(Number(s3.yMin)) ? Number(s3.yMin) : -5,
+          yMax: Number.isFinite(Number(s3.yMax)) ? Number(s3.yMax) : 5,
+        };
+        const nx = Math.max(20, Number(s3.nx) || 80);
+        const ny = Math.max(20, Number(s3.ny) || 80);
+        const degree = Number.isFinite(Number(s3.degree))
+          ? Number(s3.degree)
+          : tab.degree ?? 2;
+
+        const nextMarkers = [];
+        const fn = aiMakeScalarFn2D(s3.expr ?? "0");
+
+        for (const c of commands) {
+          const action = c.action;
+          const args = c.args ?? {};
+          const samplesX = Math.max(20, Number(args.samplesX) || nx);
+          const samplesY = Math.max(20, Number(args.samplesY) || ny);
+          const maxRoots = Number(args.maxRoots) || 12;
+          const rootEps = Number(args.eps) || 1e-2;
+
+          if (action === "clear_markers") {
+            nextMarkers.length = 0;
+            continue;
+          }
+
+          if (
+            action === "fit_from_markers" ||
+            action === "recalculate_from_markers"
+          ) {
+            continue;
+          }
+
+          if (action === "contour_z") {
+            const level = Number.isFinite(Number(args.level))
+              ? Number(args.level)
+              : 0;
+            const eps = Number.isFinite(Number(args.eps))
+              ? Number(args.eps)
+              : rootEps;
+            const maxPoints = Math.max(
+              50,
+              Math.min(800, Number(args.maxPoints) || 250)
+            );
+            const sep = Number.isFinite(Number(args.dedupDist))
+              ? Number(args.dedupDist)
+              : 0.15;
+
+            const xMin = domain.xMin,
+              xMax = domain.xMax,
+              yMin = domain.yMin,
+              yMax = domain.yMax;
+
+            // grid sampling of g(x,y)=z-level
+            const grid = [];
+            for (let iy = 0; iy < samplesY; iy++) {
+              const ty = samplesY === 1 ? 0.5 : iy / (samplesY - 1);
+              const y = yMin + (yMax - yMin) * ty;
+              const row = [];
+              for (let ix = 0; ix < samplesX; ix++) {
+                const tx = samplesX === 1 ? 0.5 : ix / (samplesX - 1);
+                const x = xMin + (xMax - xMin) * tx;
+                const z = fn(x, y);
+                const g = Number.isFinite(z) ? z - level : NaN;
+                row.push({ x, y, z, g });
+              }
+              grid.push(row);
+            }
+
+            const cand = [];
+
+            const consider = (a, b) => {
+              if (!a || !b) return;
+              if (!Number.isFinite(a.g) || !Number.isFinite(b.g)) return;
+
+              // near level points or sign change
+              if (Math.abs(a.g) <= eps)
+                cand.push({ x: a.x, y: a.y, z: a.z, score: Math.abs(a.g) });
+              if (Math.abs(b.g) <= eps)
+                cand.push({ x: b.x, y: b.y, z: b.z, score: Math.abs(b.g) });
+
+              if (a.g === 0 || b.g === 0) return;
+              if (a.g * b.g < 0) {
+                // midpoint approximation
+                cand.push({
+                  x: (a.x + b.x) / 2,
+                  y: (a.y + b.y) / 2,
+                  z: (a.z + b.z) / 2,
+                  score: 0,
+                });
+              }
+            };
+
+            for (let iy = 0; iy < samplesY; iy++) {
+              for (let ix = 0; ix < samplesX; ix++) {
+                const p = grid[iy]?.[ix];
+                const pr = grid[iy]?.[ix + 1];
+                const pd = grid[iy + 1]?.[ix];
+                consider(p, pr);
+                consider(p, pd);
+              }
+            }
+
+            cand.sort((a, b) => (a.score ?? 0) - (b.score ?? 0));
+
+            const picked = [];
+            for (const p of cand) {
+              if (picked.length >= maxPoints) break;
+              if (!picked.length) {
+                picked.push(p);
+                continue;
+              }
+              const ok = picked.every(
+                (q) => Math.hypot(p.x - q.x, p.y - q.y) > sep
+              );
+              if (ok) picked.push(p);
+            }
+
+            picked.forEach((p, idx) => {
+              nextMarkers.push({
+                id: `s3-contour-${Date.now()}-${idx}`,
+                kind: "contour",
+                x: p.x,
+                y: p.y,
+                z: p.z,
+                label: idx === 0 ? `contour z=${level}` : "",
+              });
+            });
+            continue;
+          }
+
+          if (action === "slice_x") {
+            const x0 = Number(args.x);
+            if (!Number.isFinite(x0)) {
+              warn("slice_x requires args.x (number)");
+              continue;
+            }
+            const n = Math.max(30, Math.min(400, Number(args.n) || 160));
+            const yMin = domain.yMin,
+              yMax = domain.yMax;
+            for (let i = 0; i < n; i++) {
+              const t = n === 1 ? 0.5 : i / (n - 1);
+              const y = yMin + (yMax - yMin) * t;
+              const z = fn(x0, y);
+              if (!Number.isFinite(z)) continue;
+              nextMarkers.push({
+                id: `s3-slicex-${Date.now()}-${i}`,
+                kind: "slice",
+                x: x0,
+                y,
+                z,
+                label: i === 0 ? `slice x=${x0}` : "",
+              });
+              if (nextMarkers.length > 1200) break;
+            }
+            continue;
+          }
+
+          if (action === "slice_y") {
+            const y0 = Number(args.y);
+            if (!Number.isFinite(y0)) {
+              warn("slice_y requires args.y (number)");
+              continue;
+            }
+            const n = Math.max(30, Math.min(400, Number(args.n) || 160));
+            const xMin = domain.xMin,
+              xMax = domain.xMax;
+            for (let i = 0; i < n; i++) {
+              const t = n === 1 ? 0.5 : i / (n - 1);
+              const x = xMin + (xMax - xMin) * t;
+              const z = fn(x, y0);
+              if (!Number.isFinite(z)) continue;
+              nextMarkers.push({
+                id: `s3-slicey-${Date.now()}-${i}`,
+                kind: "slice",
+                x,
+                y: y0,
+                z,
+                label: i === 0 ? `slice y=${y0}` : "",
+              });
+              if (nextMarkers.length > 1200) break;
+            }
+            continue;
+          }
+
+          if (action === "closest_to_point") {
+            const p = (() => {
+              const raw = args.point;
+              if (raw && typeof raw === "object") {
+                const px = Number(raw.x),
+                  py = Number(raw.y),
+                  pz = Number(raw.z);
+                if ([px, py, pz].every(Number.isFinite))
+                  return { x: px, y: py, z: pz };
+              }
+              if (typeof raw === "string") {
+                const parts = raw
+                  .split(/[, ]+/)
+                  .map((s) => Number(s))
+                  .filter(Number.isFinite);
+                if (parts.length >= 3)
+                  return { x: parts[0], y: parts[1], z: parts[2] };
+              }
+              return { x: 0, y: 0, z: 0 };
+            })();
+
+            let best = null;
+            for (let iy = 0; iy < samplesY; iy++) {
+              const ty = samplesY === 1 ? 0.5 : iy / (samplesY - 1);
+              const y = domain.yMin + (domain.yMax - domain.yMin) * ty;
+              for (let ix = 0; ix < samplesX; ix++) {
+                const tx = samplesX === 1 ? 0.5 : ix / (samplesX - 1);
+                const x = domain.xMin + (domain.xMax - domain.xMin) * tx;
+                const z = fn(x, y);
+                if (!Number.isFinite(z)) continue;
+                const dx = x - p.x,
+                  dy = y - p.y,
+                  dz = z - p.z;
+                const d2 = dx * dx + dy * dy + dz * dz;
+                if (!best || d2 < best.d2) best = { x, y, z, d2 };
+              }
+            }
+
+            if (best) {
+              const d = Math.sqrt(Math.max(0, best.d2));
+              nextMarkers.push({
+                id: `s3-close-${Date.now()}`,
+                kind: "closest",
+                x: best.x,
+                y: best.y,
+                z: best.z,
+                label: `closest d=${d.toFixed(3)} (${best.x.toFixed(
+                  2
+                )}, ${best.y.toFixed(2)}, ${best.z.toFixed(2)})`,
+              });
+            }
+            continue;
+          }
+
+          if (action === "mark_max" || action === "find_max") {
+            const best = aiSampleSurfaceExtremum(
+              fn,
+              domain,
+              samplesX,
+              samplesY,
+              "max"
+            );
+            if (best) {
+              nextMarkers.push({
+                id: `s3-max-${Date.now()}`,
+                kind: "max",
+                x: best.x,
+                y: best.y,
+                z: best.z,
+                label: `max (${best.x.toFixed(2)}, ${best.y.toFixed(
+                  2
+                )}, ${best.z.toFixed(2)})`,
+              });
+            }
+            continue;
+          }
+
+          if (action === "mark_min" || action === "find_min") {
+            const best = aiSampleSurfaceExtremum(
+              fn,
+              domain,
+              samplesX,
+              samplesY,
+              "min"
+            );
+            if (best) {
+              nextMarkers.push({
+                id: `s3-min-${Date.now()}`,
+                kind: "min",
+                x: best.x,
+                y: best.y,
+                z: best.z,
+                label: `min (${best.x.toFixed(2)}, ${best.y.toFixed(
+                  2
+                )}, ${best.z.toFixed(2)})`,
+              });
+            }
+            continue;
+          }
+
+          if (action === "mark_roots" || action === "find_roots") {
+            // 2D root finding is expensive; we approximate by grid-sampling points where |z| is small.
+            const xMin = domain.xMin,
+              xMax = domain.xMax,
+              yMin = domain.yMin,
+              yMax = domain.yMax;
+            const cand = [];
+            for (let iy = 0; iy < samplesY; iy++) {
+              const ty = samplesY === 1 ? 0.5 : iy / (samplesY - 1);
+              const y = yMin + (yMax - yMin) * ty;
+              for (let ix = 0; ix < samplesX; ix++) {
+                const tx = samplesX === 1 ? 0.5 : ix / (samplesX - 1);
+                const x = xMin + (xMax - xMin) * tx;
+                const z = fn(x, y);
+                if (!Number.isFinite(z)) continue;
+                const az = Math.abs(z);
+                if (az <= rootEps) cand.push({ x, y, z, az });
+              }
+            }
+            cand.sort((a, b) => a.az - b.az);
+            const picked = [];
+            const sep = Number(args.dedupDist) || 0.25;
+            for (const p of cand) {
+              if (picked.length >= maxRoots) break;
+              if (!picked.length) {
+                picked.push(p);
+                continue;
+              }
+              const ok = picked.every(
+                (q) => Math.hypot(p.x - q.x, p.y - q.y) > sep
+              );
+              if (ok) picked.push(p);
+            }
+            picked.forEach((p, idx) => {
+              nextMarkers.push({
+                id: `s3-root-${Date.now()}-${idx}`,
+                kind: "root",
+                x: p.x,
+                y: p.y,
+                z: p.z,
+                label: `root≈0 (${p.x.toFixed(2)}, ${p.y.toFixed(
+                  2
+                )}, ${p.z.toFixed(2)})`,
+              });
+            });
+            continue;
+          }
+
+          if (
+            action === "mark_intersections" ||
+            action === "find_intersections"
+          ) {
+            warn(
+              "surface3d intersections are not supported without a second surface"
+            );
+            continue;
+          }
+
+          warn("unsupported action for surface3d", action);
+        }
+
+        updateSurface3D(tabId, { markers: nextMarkers });
+        log("surface3d markers applied", { tabId, count: nextMarkers.length });
+
+        const wantsFit = commands.some(
+          (c) =>
+            c.action === "fit_from_markers" ||
+            c.action === "recalculate_from_markers"
+        );
+        if (wantsFit) {
+          const baseRhs = aiStripEq(s3.expr || "0") || "0";
+          const baseFn = aiMakeScalarFn2D(baseRhs);
+          const composeExpr = (deltaExpr) => {
+            if (!deltaExpr || deltaExpr === "0") return baseRhs;
+            return `(${baseRhs}) + (${deltaExpr})`;
+          };
+          const res = aiFitSurfaceDeltaPolynomial(
+            nextMarkers,
+            degree,
+            baseFn,
+            domain,
+            {
+              markerWeight: 1.0,
+              anchorWeight: 0.25,
+              anchorGrid: 10,
+              lambda: 1e-4,
+            }
+          );
+          if (res.ok) {
+            const composed = composeExpr(res.deltaExpr);
+            updateSurface3D(tabId, { expr: composed });
+            log("surface3d fit committed", { tabId, expr: composed });
+          } else {
+            warn("surface3d fit failed", res.reason);
+          }
+        }
+        return;
+      }
+
+      warn("tab type not supported", tab.type);
     },
-    [deriveFor, focusedPane, panes]
+    // NOTE: updateCurve3D/updateSurface3D are stable callbacks but are declared
+    // later in this file; keeping them out avoids TDZ issues during evaluation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [deriveFor, focusedPane, panes, tabState]
   );
 
   const leftActiveId = panes.left.activeId;
@@ -1879,7 +2900,10 @@ updatePoint: (idx, xy) => {
   // 활성 탭 상태 업데이트 helper
   const activeId = panes[focusedPane].activeId;
   const active = activeId ? tabState[activeId] : null;
-  const activeEqPack = activeId && tabState[activeId]?.type === "equation" ? deriveFor(activeId) : null;
+  const activeEqPack =
+    activeId && tabState[activeId]?.type === "equation"
+      ? deriveFor(activeId)
+      : null;
 
   // 이전 placeholder 제거 — currentContext를 사용
 
@@ -2243,7 +3267,11 @@ updatePoint: (idx, xy) => {
               const norm = normalizeFormula(f);
               setTabState((st) => ({
                 ...st,
-                [tid]: { ...st[tid], equation: norm, ver: (st[tid].ver ?? 0) + 1 },
+                [tid]: {
+                  ...st[tid],
+                  equation: norm,
+                  ver: (st[tid].ver ?? 0) + 1,
+                },
               }));
               setTabs((t) => ({
                 ...t,
@@ -2417,7 +3445,6 @@ updatePoint: (idx, xy) => {
                   }`}
                   surface3d={leftActive.surface3d}
                   onChange={(patch) => updateSurface3D(leftActiveId, patch)}
-                  
                 />
               ) : (
                 <div className="empty-hint">왼쪽에 열린 탭이 없습니다.</div>
@@ -2468,8 +3495,8 @@ updatePoint: (idx, xy) => {
                         curveKey={rightPack.curveKey}
                         markers={rightActive?.markers ?? []}
                         commitRule={rightPack.commitRule}
-                    addPoint={rightPack.addPoint}
-                    removePoint={rightPack.removePoint}
+                        addPoint={rightPack.addPoint}
+                        removePoint={rightPack.removePoint}
                         ruleMode={rightPack.ruleMode}
                         setRuleMode={rightPack.setRuleMode}
                         rulePolyDegree={rightPack.rulePolyDegree}
@@ -2499,7 +3526,9 @@ updatePoint: (idx, xy) => {
                         rightActive.vaultId ?? ""
                       }`}
                       surface3d={rightActive.surface3d}
-                      onChange={(patch) => updateSurface3D(rightActiveId, patch)}
+                      onChange={(patch) =>
+                        updateSurface3D(rightActiveId, patch)
+                      }
                     />
                   ) : (
                     <div className="empty-hint">
