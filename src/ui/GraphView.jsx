@@ -10,6 +10,10 @@ export default function GraphView({
   updatePoint,
   commitRule,
 
+  // ✅ 추가: Alt+클릭 추가, 우클릭 삭제용 콜백
+  addPoint,
+  removePoint,
+
   xmin,
   xmax,
   ymin,
@@ -50,29 +54,39 @@ export default function GraphView({
         points={points}
         onPointChange={updatePoint}
         onPointCommit={commitRule}
+
+        // ✅ 신규 기능 연결
+        onPointAdd={addPoint}
+        onPointRemove={removePoint}
+
         xmin={xmin}
         xmax={xmax}
         ymin={ymin}
         ymax={ymax}
+
         gridMode={gridMode}
         setGridMode={setGridMode}
         gridStep={gridStep}
         setGridStep={setGridStep}
         minorDiv={minorDiv}
         setMinorDiv={setMinorDiv}
+
         viewMode={viewMode}
         setViewMode={setViewMode}
         editMode={editMode}
         setEditMode={setEditMode}
+
         fn={fittedFn}
         typedFn={typedFn}
         curveKey={curveKey}
         markers={markers}
+
         ruleMode={ruleMode}
         setRuleMode={setRuleMode}
         rulePolyDegree={rulePolyDegree}
         setRulePolyDegree={setRulePolyDegree}
         ruleError={ruleError}
+
         showControls={showControls}
       />
     </div>

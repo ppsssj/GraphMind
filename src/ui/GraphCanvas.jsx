@@ -330,48 +330,121 @@ function EditablePoint({
 
 function DraggablePoint({
   index,
+  pointKey,
+  points,
+  getPointKey,
+
   position,
   xmin,
   xmax,
   ymin,
   ymax,
+
   onChange,
   onCommit,
+  onRemove,
+
   setControlsBusy,
+
+  // selection + group move
+  selectedKeys,
+  setSelectedKeys,
+
+  // prevent Alt+click add from firing when interacting with points
+  suppressAltRef,
 }) {
-  const plane = useMemo(
-    () => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0),
-    []
-  );
+  const plane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), []);
   const hit = useRef(new THREE.Vector3());
   const [hovered, setHovered] = useState(false);
   const [dragging, setDragging] = useState(false);
 
   useCursor(hovered || dragging);
 
+  const dragStartRef = useRef(null); // { startHit: Vector3, items: [{i,x,y}] }
+
+  const clampXY = (x, y) => {
+    let xx = x;
+    let yy = y;
+
+    if (Number.isFinite(xmin) && Number.isFinite(xmax)) xx = Math.max(xmin, Math.min(xmax, xx));
+    if (Number.isFinite(ymin) && Number.isFinite(ymax)) yy = Math.max(ymin, Math.min(ymax, yy));
+
+    return { x: xx, y: yy };
+  };
+
+  const computeNextSelection = (prevSet, key, e) => {
+    const prev = prevSet instanceof Set ? prevSet : new Set();
+    const toggle = !!(e?.ctrlKey || e?.metaKey);
+
+    if (toggle) {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    }
+
+    // 일반 클릭: 이미 다중 선택이고, 그 안의 점을 잡았으면 selection 유지
+    if (prev.size > 1 && prev.has(key)) return new Set(prev);
+
+    return new Set([key]);
+  };
+
   const onPointerDown = (e) => {
     e.stopPropagation();
+
+    // ✅ Alt+클릭 추가 로직과 충돌 방지
+    if (suppressAltRef) {
+      suppressAltRef.current = true;
+      requestAnimationFrame(() => (suppressAltRef.current = false));
+    }
+
     setDragging(true);
     setControlsBusy(true);
+
+    const key = pointKey ?? (typeof getPointKey === "function" ? getPointKey(points?.[index], index) : points?.[index]?.id ?? index);
+
+    // ✅ selection 업데이트(동기 계산 + state 반영)
+    const nextSel = computeNextSelection(selectedKeys, key, e);
+    setSelectedKeys?.(nextSel);
+
     try {
       e.target.setPointerCapture?.(e.pointerId);
     } catch {}
+
+    // ✅ 그룹 이동 준비: 선택된 점들만 start snapshot
+    const sel = nextSel instanceof Set && nextSel.size ? nextSel : new Set([key]);
+    const items = [];
+    const arr = Array.isArray(points) ? points : [];
+    for (let i = 0; i < arr.length; i++) {
+      const k = typeof getPointKey === "function" ? getPointKey(arr[i], i) : arr[i]?.id ?? i;
+      if (sel.has(k)) items.push({ i, x: Number(arr[i]?.x) || 0, y: Number(arr[i]?.y) || 0 });
+    }
+
+    // start hit on plane
+    if (e.ray.intersectPlane(plane, hit.current)) {
+      dragStartRef.current = { startHit: hit.current.clone(), items };
+    } else {
+      dragStartRef.current = null;
+    }
   };
 
   const onPointerMove = (e) => {
     if (!dragging) return;
     e.stopPropagation();
 
-    if (e.ray.intersectPlane(plane, hit.current)) {
-      let x = hit.current.x;
-      let y = hit.current.y;
+    if (!e.ray.intersectPlane(plane, hit.current)) return;
+    const st = dragStartRef.current;
+    if (!st?.startHit || !Array.isArray(st.items) || st.items.length === 0) return;
 
-      if (Number.isFinite(xmin) && Number.isFinite(xmax))
-        x = Math.max(xmin, Math.min(xmax, x));
-      if (Number.isFinite(ymin) && Number.isFinite(ymax))
-        y = Math.max(ymin, Math.min(ymax, y));
+    const dx = hit.current.x - st.startHit.x;
+    const dy = hit.current.y - st.startHit.y;
 
-      if (Number.isFinite(x) && Number.isFinite(y)) onChange(index, { x, y });
+    // ✅ 선택된 점들만 동일 Δ로 이동
+    for (const it of st.items) {
+      const nx = it.x + dx;
+      const ny = it.y + dy;
+      const c = clampXY(nx, ny);
+      onChange?.(it.i, c);
     }
   };
 
@@ -386,8 +459,38 @@ function DraggablePoint({
       if (el?.hasPointerCapture?.(pid)) el.releasePointerCapture(pid);
     } catch {}
 
+    dragStartRef.current = null;
     onCommit?.(index);
   };
+
+  const onContextMenu = (e) => {
+    // 우클릭으로 점 제거
+    try { e?.stopPropagation?.(); } catch {}
+    try { e?.nativeEvent?.stopPropagation?.(); } catch {}
+    try { e?.nativeEvent?.preventDefault?.(); } catch {}
+    try { e?.preventDefault?.(); } catch {}
+
+    const key =
+      pointKey ??
+      (typeof getPointKey === "function"
+        ? getPointKey(points?.[index], index)
+        : points?.[index]?.id ?? index);
+
+    if (typeof onRemove === "function") {
+      // ✅ removePoint 구현이 (index), (index,key), (id) 등 제각각일 수 있어 방어적으로 호출
+      if (onRemove.length >= 2) {
+        onRemove(index, key);
+      } else if (onRemove.length === 1) {
+        const hasId = points?.[index]?.id !== undefined && points?.[index]?.id !== null;
+        onRemove(hasId ? points[index].id : index);
+      } else {
+        onRemove();
+      }
+    }
+  };
+
+  const selfKey = pointKey ?? (typeof getPointKey === "function" ? getPointKey(points?.[index], index) : points?.[index]?.id ?? index);
+  const isSelected = selectedKeys instanceof Set ? selectedKeys.has(selfKey) : false;
 
   return (
     <group>
@@ -404,12 +507,13 @@ function DraggablePoint({
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
+        onContextMenu={onContextMenu}
       >
         <sphereGeometry args={[0.06, 24, 24]} />
         <meshStandardMaterial
-          color={dragging ? "#ff9800" : hovered ? "#ffd54f" : "#ffc107"}
-          emissive={dragging ? "#ff9800" : "#000000"}
-          emissiveIntensity={dragging ? 0.25 : 0}
+          color={dragging ? "#ff9800" : isSelected ? "#38bdf8" : hovered ? "#ffd54f" : "#ffc107"}
+          emissive={isSelected ? "#0ea5e9" : dragging ? "#ff9800" : "#000000"}
+          emissiveIntensity={isSelected ? 0.22 : dragging ? 0.25 : 0}
         />
       </mesh>
 
@@ -428,10 +532,243 @@ function DraggablePoint({
   );
 }
 
+function AltMarqueeSelectAndAddR3F({
+  enabled = true,
+  wrapperRef,
+
+  points = [],
+  getPointKey = (p, i) => (p && p.id !== undefined ? p.id : i),
+
+  setSelectedKeys,
+  setMarqueeBox,
+
+  onPointAdd,
+
+  fn,
+  typedFn,
+  showFit,
+  showTyped,
+
+  suppressRef,
+}) {
+  const { camera } = useThree();
+
+  const activeRef = useRef(false);
+  const movedRef = useRef(false);
+  const startRef = useRef({ x: 0, y: 0 });
+  const lastRef = useRef({ x: 0, y: 0 });
+  const pointerIdRef = useRef(null);
+
+  const getLocal = (ev) => {
+    const wrap = wrapperRef?.current;
+    const rect = wrap?.getBoundingClientRect?.();
+    if (!rect) return null;
+    return {
+      x: ev.clientX - rect.left,
+      y: ev.clientY - rect.top,
+      w: rect.width,
+      h: rect.height,
+      rect,
+    };
+  };
+
+  const rectNorm = (a, b) => {
+    const x0 = Math.min(a.x, b.x);
+    const y0 = Math.min(a.y, b.y);
+    const x1 = Math.max(a.x, b.x);
+    const y1 = Math.max(a.y, b.y);
+    return { x0, y0, x1, y1 };
+  };
+
+  const pickAddPoint = (worldX, worldY) => {
+    if (typeof onPointAdd !== "function") return;
+
+    const x = worldX;
+    const yClick = worldY;
+
+    let bestY = yClick;
+    let bestDist = Infinity;
+
+    const tryFn = (f) => {
+      if (typeof f !== "function") return;
+      let y;
+      try {
+        y = f(x);
+      } catch {
+        return;
+      }
+      const yy = Number(y);
+      if (!Number.isFinite(yy)) return;
+      const d = Math.abs(yy - yClick);
+      if (d < bestDist) {
+        bestDist = d;
+        bestY = yy;
+      }
+    };
+
+    if (showFit) tryFn(fn);
+    if (showTyped) tryFn(typedFn);
+
+    onPointAdd({ x, y: bestY });
+  };
+
+  const computeSelection = (a, b, rect) => {
+    const r = rectNorm(a, b);
+    const sel = new Set();
+    const v = new THREE.Vector3();
+
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      const xx = Number(p?.x);
+      const yy = Number(p?.y);
+      if (!Number.isFinite(xx) || !Number.isFinite(yy)) continue;
+
+      v.set(xx, yy, 0).project(camera);
+      const px = (v.x * 0.5 + 0.5) * rect.width;
+      const py = (-v.y * 0.5 + 0.5) * rect.height;
+
+      if (px >= r.x0 && px <= r.x1 && py >= r.y0 && py <= r.y1) {
+        sel.add(getPointKey(p, i));
+      }
+    }
+
+    return sel;
+  };
+
+  const onPlanePointerDown = (e) => {
+    if (!enabled) return;
+    if (!e.altKey) return;
+    if (e.button !== 0) return; // left only
+    if (suppressRef?.current) return;
+
+    const local = getLocal(e.nativeEvent);
+    if (!local) return;
+
+    activeRef.current = true;
+    movedRef.current = false;
+    pointerIdRef.current = e.pointerId;
+
+    startRef.current = { x: local.x, y: local.y };
+    lastRef.current = { x: local.x, y: local.y };
+
+    setMarqueeBox?.({ x0: local.x, y0: local.y, x1: local.x, y1: local.y });
+
+    try {
+      e.target.setPointerCapture?.(e.pointerId);
+    } catch {}
+
+    try {
+      e.nativeEvent?.preventDefault?.();
+    } catch {}
+    e.stopPropagation();
+  };
+
+  const onPlanePointerMove = (e) => {
+    if (!activeRef.current) return;
+    if (pointerIdRef.current !== e.pointerId) return;
+
+    const local = getLocal(e.nativeEvent);
+    if (!local) return;
+
+    lastRef.current = { x: local.x, y: local.y };
+
+    if (!movedRef.current) {
+      const dx = local.x - startRef.current.x;
+      const dy = local.y - startRef.current.y;
+      if (dx * dx + dy * dy > 16) movedRef.current = true;
+    }
+
+    setMarqueeBox?.({
+      x0: startRef.current.x,
+      y0: startRef.current.y,
+      x1: local.x,
+      y1: local.y,
+    });
+
+    try {
+      e.nativeEvent?.preventDefault?.();
+    } catch {}
+    e.stopPropagation();
+  };
+
+  const finish = (e) => {
+    if (!activeRef.current) return;
+    if (pointerIdRef.current !== e.pointerId) return;
+
+    const local = getLocal(e.nativeEvent);
+    const rect = local?.rect || wrapperRef?.current?.getBoundingClientRect?.();
+    const end = local ? { x: local.x, y: local.y } : lastRef.current;
+
+    activeRef.current = false;
+    pointerIdRef.current = null;
+    setMarqueeBox?.(null);
+
+    // Alt+click → add point
+    if (!movedRef.current) {
+      pickAddPoint(e.point.x, e.point.y);
+      try {
+        e.nativeEvent?.preventDefault?.();
+      } catch {}
+      e.stopPropagation();
+      return;
+    }
+
+    // Alt+drag → box select (Ctrl/Cmd additive)
+    if (rect) {
+      const boxSel = computeSelection(startRef.current, end, rect);
+
+      setSelectedKeys?.((prev) => {
+        const prevSet = prev instanceof Set ? prev : new Set();
+        const additive = !!(e.ctrlKey || e.metaKey);
+
+        if (!additive) return boxSel;
+
+        const next = new Set(prevSet);
+        for (const k of boxSel) next.add(k);
+        return next;
+      });
+    }
+
+    try {
+      e.nativeEvent?.preventDefault?.();
+    } catch {}
+    e.stopPropagation();
+  };
+
+  const onPlanePointerUp = (e) => finish(e);
+  const onPlanePointerCancel = (e) => {
+    if (activeRef.current && pointerIdRef.current === e.pointerId) {
+      activeRef.current = false;
+      pointerIdRef.current = null;
+      setMarqueeBox?.(null);
+      try {
+        e.nativeEvent?.preventDefault?.();
+      } catch {}
+      e.stopPropagation();
+    }
+  };
+
+  return (
+    <mesh
+      position={[0, 0, -0.001]}
+      onPointerDown={onPlanePointerDown}
+      onPointerMove={onPlanePointerMove}
+      onPointerUp={onPlanePointerUp}
+      onPointerCancel={onPlanePointerCancel}
+      renderOrder={-1000}
+    >
+      <planeGeometry args={[10000, 10000]} />
+      <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+    </mesh>
+  );
+}
+
 export default function GraphCanvas({
   points,
   onPointChange,
   onPointCommit,
+  onPointAdd,
+  onPointRemove,
   xmin,
   xmax,
   ymin,
@@ -465,6 +802,47 @@ export default function GraphCanvas({
   const [controlsBusy, setControlsBusy] = useState(false);
   const [viewMode, setViewMode] = useState("both"); // typed | fit | both
   const [editMode, setEditMode] = useState("drag"); // arrows | drag
+
+  const getPointKey = (p, i) => (p && p.id !== undefined ? p.id : i);
+
+  const [selectedKeys, setSelectedKeys] = useState(() => new Set());
+  const [marqueeBox, setMarqueeBox] = useState(null); // { x0, y0, x1, y1 } in px (wrapper local)
+
+  const suppressAltRef = useRef(false);
+  const [altDown, setAltDown] = useState(false);
+
+  useEffect(() => {
+    const onKeyDown = (ev) => {
+      if (ev.key === "Alt") setAltDown(true);
+    };
+    const onKeyUp = (ev) => {
+      if (ev.key === "Alt") setAltDown(false);
+    };
+    const onBlur = () => setAltDown(false);
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
+
+  // points가 바뀌면(추가/삭제) 선택 집합을 유효 키로 정리
+  useEffect(() => {
+    setSelectedKeys((prev) => {
+      if (!(prev instanceof Set) || prev.size === 0) return prev;
+      const valid = new Set();
+      if (Array.isArray(points)) {
+        for (let i = 0; i < points.length; i++) valid.add(getPointKey(points[i], i));
+      }
+      const next = new Set();
+      for (const k of prev) if (valid.has(k)) next.add(k);
+      return next;
+    });
+  }, [points]);
 
   const handEnabled = useInputPrefs((s) => s.handControlEnabled);
 
@@ -572,27 +950,60 @@ export default function GraphCanvas({
     if (showFit) sampleFn(fn);
     if (showTyped) sampleFn(typedFn);
 
+    // ✅ points/markers도 bounds 계산에 포함 (격자 밖으로 나가면 자동 확장)
+    let extraMinX = Math.min(x0, x1);
+    let extraMaxX = Math.max(x0, x1);
+
+    const pushXY = (x, y) => {
+      const xx = Number(x);
+      const yy = Number(y);
+      if (Number.isFinite(xx) && Math.abs(xx) <= MAX_ABS) {
+        if (xx < extraMinX) extraMinX = xx;
+        if (xx > extraMaxX) extraMaxX = xx;
+      }
+      if (Number.isFinite(yy) && Math.abs(yy) <= MAX_ABS) ys.push(yy);
+    };
+
+    if (Array.isArray(points)) {
+      for (const p of points) pushXY(p?.x, p?.y);
+    }
+    if (Array.isArray(markers)) {
+      for (const m of markers) pushXY(m?.x, m?.y);
+    }
+
     // 곡선이 없거나 유효 샘플이 부족하면 기존 범위 사용
     if (ys.length < 8) {
       return { xmin: x0, xmax: x1, ymin: dragYMin, ymax: dragYMax };
     }
 
     ys.sort((a, b) => a - b);
-    const at = (p) => {
-      const idx = Math.floor((ys.length - 1) * p);
-      return ys[Math.max(0, Math.min(ys.length - 1, idx))];
-    };
 
-    // 분위수 기반(안정적) y-bounds
-    let yLo = at(0.05);
-    let yHi = at(0.95);
+    // ✅ 곡선을 실제로 포함하도록 min/max 사용
+    let yLo = ys[0];
+    let yHi = ys[ys.length - 1];
 
     const step = Math.max(0.1, Number(gridStepEff) || 1);
 
     // 거의 평평한 경우: 최소 높이 확보
     let span = yHi - yLo;
     if (!Number.isFinite(span) || Math.abs(span) < step * 0.5) {
-      const mid = at(0.5);
+      const xMid = (x0 + x1) / 2;
+
+      // 현재 표시 중인 곡선 우선으로 mid 계산 (typed → fit 순)
+      const midFn =
+        (showTyped && typeof typedFn === "function" ? typedFn : null) ||
+        (showFit && typeof fn === "function" ? fn : null);
+
+      let mid = yLo; // fallback
+      if (midFn) {
+        try {
+          const v = Number(midFn(xMid));
+          if (Number.isFinite(v)) mid = v;
+        } catch {
+          // keep fallback
+        }
+      }
+
       yLo = mid - step * 2;
       yHi = mid + step * 2;
       span = yHi - yLo;
@@ -600,8 +1011,8 @@ export default function GraphCanvas({
 
     // 1차 패딩(기존): 곡선 주변 여유
     const corePad = Math.max(step * 0.5, span * 0.08);
-    let xMinGrid = x0;
-    let xMaxGrid = x1;
+    let xMinGrid = extraMinX;
+    let xMaxGrid = extraMaxX;
     let yMinGrid = yLo - corePad;
     let yMaxGrid = yHi + corePad;
 
@@ -644,6 +1055,10 @@ export default function GraphCanvas({
     fn,
     typedFn,
     gridStepEff,
+    points,
+    markers,
+    curveKey,
+    viewMode,
   ]);
 
   const commit = (idx) => onPointCommit?.(idx);
@@ -651,6 +1066,10 @@ export default function GraphCanvas({
   return (
     <div
       ref={wrapperRef}
+      onContextMenu={(e) => {
+        // ✅ 캔버스 영역 기본 우클릭 메뉴 차단 (노드 우클릭 삭제 UX 안정화)
+        e.preventDefault();
+      }}
       style={{
         position: "relative",
         flex: 1,
@@ -679,6 +1098,22 @@ export default function GraphCanvas({
         }
       >
         <CameraControlBridge cameraApiRef={cameraApiRef} />
+
+        <AltMarqueeSelectAndAddR3F
+          enabled={true}
+          wrapperRef={wrapperRef}
+          points={points}
+          getPointKey={getPointKey}
+          selectedKeys={selectedKeys}
+          setSelectedKeys={setSelectedKeys}
+          setMarqueeBox={setMarqueeBox}
+          onPointAdd={onPointAdd}
+          fn={fn}
+          typedFn={typedFn}
+          showFit={showFit}
+          showTyped={showTyped}
+          suppressRef={suppressAltRef}
+        />
 
         <ambientLight intensity={0.7} />
         <directionalLight position={[3, 5, 6]} intensity={0.9} />
@@ -754,6 +1189,13 @@ export default function GraphCanvas({
             <DraggablePoint
               key={"d-" + (p.id ?? i)}
               index={i}
+              pointKey={getPointKey(p, i)}
+              points={points}
+              getPointKey={getPointKey}
+              selectedKeys={selectedKeys}
+              setSelectedKeys={setSelectedKeys}
+              onRemove={onPointRemove}
+              suppressAltRef={suppressAltRef}
               position={{ x: p.x, y: p.y }}
               xmin={xmin}
               xmax={xmax}
@@ -769,10 +1211,44 @@ export default function GraphCanvas({
         <OrbitControls
           ref={controlsRef}
           makeDefault
-          enabled={!controlsBusy && !handEnabled}
+          enabled={!controlsBusy && !handEnabled && !altDown && !marqueeBox}
         />
         <OrientationOverlay controlsRef={controlsRef} />
       </Canvas>
+
+      {marqueeBox && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            pointerEvents: "none",
+            zIndex: 15,
+          }}
+        >
+          {(() => {
+            const left = Math.min(marqueeBox.x0, marqueeBox.x1);
+            const top = Math.min(marqueeBox.y0, marqueeBox.y1);
+            const width = Math.abs(marqueeBox.x1 - marqueeBox.x0);
+            const height = Math.abs(marqueeBox.y1 - marqueeBox.y0);
+
+            return (
+              <div
+                style={{
+                  position: "absolute",
+                  left,
+                  top,
+                  width,
+                  height,
+                  border: "1px solid rgba(56,189,248,0.9)",
+                  background: "rgba(56,189,248,0.10)",
+                  boxShadow: "0 0 0 1px rgba(0,0,0,0.25) inset",
+                  borderRadius: 6,
+                }}
+              />
+            );
+          })()}
+        </div>
+      )}
 
       {showControls && (
         <div
