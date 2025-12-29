@@ -31,13 +31,80 @@ function makeScalarFn(expr) {
   }
 }
 
+// -----------------------------
+// auto-focus (zoom to markers) utils
+// - triggers only when markers contain _focusNonce (set by AI commands in Studio)
+// -----------------------------
+function fitCameraToBox({
+  camera,
+  controls,
+  box,
+  padding = 1.35,
+  minZoomFactor = 0.85,
+  minRadius = 0.75,
+}) {
+  if (!box) return;
+
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+
+  // Use bounding sphere for stable sizing (Box3 size can be ~0 for a single point)
+  const sphere = new THREE.Sphere();
+  box.getBoundingSphere(sphere);
+
+  let radius = Number(sphere.radius);
+  if (!Number.isFinite(radius) || radius < 1e-6) radius = minRadius;
+
+  const fov = THREE.MathUtils.degToRad(camera.fov || 50);
+  const desiredDist = (radius / Math.sin(fov / 2)) * padding;
+
+  const curTarget =
+    controls?.target && controls.target.clone
+      ? controls.target.clone()
+      : new THREE.Vector3(0, 0, 0);
+  const curDist = camera.position.distanceTo(curTarget);
+
+  // Prevent over-zoom-in: never get closer than a fraction of the current distance.
+  const dist = Math.max(desiredDist, curDist * minZoomFactor);
+
+  // Keep current view direction
+  const dir = camera.position.clone().sub(curTarget);
+  if (dir.lengthSq() < 1e-12) dir.set(1, 1, 1);
+  dir.normalize();
+
+  camera.position.copy(center.clone().add(dir.multiplyScalar(dist)));
+  camera.near = Math.max(0.01, dist / 200);
+  camera.far = Math.max(50, dist * 200);
+  camera.updateProjectionMatrix?.();
+
+  if (controls) {
+    controls.target.copy(center);
+    controls.update?.();
+  }
+}
+
+function getFocusNonceFromMarkers(markers) {
+  const ms = Array.isArray(markers) ? markers : [];
+  const n = ms.find(
+    (m) => m?._focusNonce !== undefined && m?._focusNonce !== null
+  )?._focusNonce;
+  return n ?? null;
+}
+
 /**
  * 격자(큐브 라티스)
  * - bounds 변경 시 R3F에서 geometry 업데이트가 안 먹는 케이스 방지:
  *   상위에서 key로 remount 강제 가능
  */
-function CubeLatticeGrid({ bounds, gridMode = "major", gridStep = 1, minorDiv = 4 }) {
-  const mode = ["off", "box", "major", "full"].includes(String(gridMode)) ? String(gridMode) : "major";
+function CubeLatticeGrid({
+  bounds,
+  gridMode = "major",
+  gridStep = 1,
+  minorDiv = 4,
+}) {
+  const mode = ["off", "box", "major", "full"].includes(String(gridMode))
+    ? String(gridMode)
+    : "major";
   const b = bounds;
 
   const buildCoords = (minV, maxV, step, maxDivisions) => {
@@ -47,7 +114,8 @@ function CubeLatticeGrid({ bounds, gridMode = "major", gridStep = 1, minorDiv = 
     const start = Math.ceil(minV / s) * s;
     for (let v = start; v <= maxV + 1e-6; v += s) coords.push(v);
 
-    if (coords.length === 0 || Math.abs(coords[0] - minV) > 1e-6) coords.unshift(minV);
+    if (coords.length === 0 || Math.abs(coords[0] - minV) > 1e-6)
+      coords.unshift(minV);
     if (Math.abs(coords[coords.length - 1] - maxV) > 1e-6) coords.push(maxV);
 
     if (coords.length > maxDivisions + 1) {
@@ -58,7 +126,17 @@ function CubeLatticeGrid({ bounds, gridMode = "major", gridStep = 1, minorDiv = 
     return { coords, step: s };
   };
 
-  const buildLatticePositions = (xs, ys, zs, xmin, xmax, ymin, ymax, zmin, zmax) => {
+  const buildLatticePositions = (
+    xs,
+    ys,
+    zs,
+    xmin,
+    xmax,
+    ymin,
+    ymax,
+    zmin,
+    zmax
+  ) => {
     const nx = xs.length;
     const ny = ys.length;
     const nz = zs.length;
@@ -71,24 +149,36 @@ function CubeLatticeGrid({ bounds, gridMode = "major", gridStep = 1, minorDiv = 
       for (let zi = 0; zi < nz; zi++) {
         const y = ys[yi];
         const z = zs[zi];
-        arr[o++] = xmin; arr[o++] = y; arr[o++] = z;
-        arr[o++] = xmax; arr[o++] = y; arr[o++] = z;
+        arr[o++] = xmin;
+        arr[o++] = y;
+        arr[o++] = z;
+        arr[o++] = xmax;
+        arr[o++] = y;
+        arr[o++] = z;
       }
     }
     for (let xi = 0; xi < nx; xi++) {
       for (let zi = 0; zi < nz; zi++) {
         const x = xs[xi];
         const z = zs[zi];
-        arr[o++] = x; arr[o++] = ymin; arr[o++] = z;
-        arr[o++] = x; arr[o++] = ymax; arr[o++] = z;
+        arr[o++] = x;
+        arr[o++] = ymin;
+        arr[o++] = z;
+        arr[o++] = x;
+        arr[o++] = ymax;
+        arr[o++] = z;
       }
     }
     for (let xi = 0; xi < nx; xi++) {
       for (let yi = 0; yi < ny; yi++) {
         const x = xs[xi];
         const y = ys[yi];
-        arr[o++] = x; arr[o++] = y; arr[o++] = zmin;
-        arr[o++] = x; arr[o++] = y; arr[o++] = zmax;
+        arr[o++] = x;
+        arr[o++] = y;
+        arr[o++] = zmin;
+        arr[o++] = x;
+        arr[o++] = y;
+        arr[o++] = zmax;
       }
     }
 
@@ -101,25 +191,47 @@ function CubeLatticeGrid({ bounds, gridMode = "major", gridStep = 1, minorDiv = 
     const h = b.ymax - b.ymin;
     const d = b.zmax - b.zmin;
 
-    const box = new THREE.BoxGeometry(Math.max(1e-6, w), Math.max(1e-6, h), Math.max(1e-6, d));
+    const box = new THREE.BoxGeometry(
+      Math.max(1e-6, w),
+      Math.max(1e-6, h),
+      Math.max(1e-6, d)
+    );
     box.translate(b.xmin + w / 2, b.ymin + h / 2, b.zmin + d / 2);
     return box;
   }, [b, mode]);
 
   useEffect(() => {
     return () => {
-      try { edgesGeo?.dispose(); } catch {}
+      try {
+        edgesGeo?.dispose();
+      } catch {}
     };
   }, [edgesGeo]);
 
   const { majorPositions, minorPositions } = useMemo(() => {
-    if (!b || mode === "off" || mode === "box") return { majorPositions: null, minorPositions: null };
+    if (!b || mode === "off" || mode === "box")
+      return { majorPositions: null, minorPositions: null };
 
-    const { coords: xs, step: majorStepNorm } = buildCoords(b.xmin, b.xmax, gridStep, 50);
+    const { coords: xs, step: majorStepNorm } = buildCoords(
+      b.xmin,
+      b.xmax,
+      gridStep,
+      50
+    );
     const { coords: ys } = buildCoords(b.ymin, b.ymax, gridStep, 50);
     const { coords: zs } = buildCoords(b.zmin, b.zmax, gridStep, 50);
 
-    const major = buildLatticePositions(xs, ys, zs, b.xmin, b.xmax, b.ymin, b.ymax, b.zmin, b.zmax);
+    const major = buildLatticePositions(
+      xs,
+      ys,
+      zs,
+      b.xmin,
+      b.xmax,
+      b.ymin,
+      b.ymax,
+      b.zmin,
+      b.zmax
+    );
     if (mode !== "full") return { majorPositions: major, minorPositions: null };
 
     const div = Math.max(2, Math.floor(Number(minorDiv) || 4));
@@ -140,7 +252,17 @@ function CubeLatticeGrid({ bounds, gridMode = "major", gridStep = 1, minorDiv = 
     const ysMinor = filterNotOnMajor(ys2, majorStepNorm);
     const zsMinor = filterNotOnMajor(zs2, majorStepNorm);
 
-    const minor = buildLatticePositions(xsMinor, ysMinor, zsMinor, b.xmin, b.xmax, b.ymin, b.ymax, b.zmin, b.zmax);
+    const minor = buildLatticePositions(
+      xsMinor,
+      ysMinor,
+      zsMinor,
+      b.xmin,
+      b.xmax,
+      b.ymin,
+      b.ymax,
+      b.zmin,
+      b.zmax
+    );
     return { majorPositions: major, minorPositions: minor };
   }, [b, mode, gridStep, minorDiv]);
 
@@ -151,25 +273,50 @@ function CubeLatticeGrid({ bounds, gridMode = "major", gridStep = 1, minorDiv = 
       {edgesGeo && (
         <lineSegments>
           <edgesGeometry args={[edgesGeo]} />
-          <lineBasicMaterial color="#64748b" transparent opacity={0.25} depthWrite={false} />
+          <lineBasicMaterial
+            color="#64748b"
+            transparent
+            opacity={0.25}
+            depthWrite={false}
+          />
         </lineSegments>
       )}
 
       {majorPositions && (
         <lineSegments>
           <bufferGeometry>
-            <bufferAttribute attach="attributes-position" array={majorPositions} count={majorPositions.length / 3} itemSize={3} />
+            <bufferAttribute
+              attach="attributes-position"
+              array={majorPositions}
+              count={majorPositions.length / 3}
+              itemSize={3}
+            />
           </bufferGeometry>
-          <lineBasicMaterial color="#334155" transparent opacity={0.12} depthWrite={false} />
+          <lineBasicMaterial
+            color="#334155"
+            transparent
+            opacity={0.12}
+            depthWrite={false}
+          />
         </lineSegments>
       )}
 
       {minorPositions && (
         <lineSegments>
           <bufferGeometry>
-            <bufferAttribute attach="attributes-position" array={minorPositions} count={minorPositions.length / 3} itemSize={3} />
+            <bufferAttribute
+              attach="attributes-position"
+              array={minorPositions}
+              count={minorPositions.length / 3}
+              itemSize={3}
+            />
           </bufferGeometry>
-          <lineBasicMaterial color="#334155" transparent opacity={0.04} depthWrite={false} />
+          <lineBasicMaterial
+            color="#334155"
+            transparent
+            opacity={0.04}
+            depthWrite={false}
+          />
         </lineSegments>
       )}
     </group>
@@ -286,7 +433,9 @@ function Surface3DScene({
 
   // OrbitControls enabled 제어
   useEffect(() => {
-    const editingHold = Boolean(editMode) && (altPressed || selectingRef.current || dragGroupRef.current.active);
+    const editingHold =
+      Boolean(editMode) &&
+      (altPressed || selectingRef.current || dragGroupRef.current.active);
     if (controlsRef.current) controlsRef.current.enabled = !editingHold;
   }, [altPressed, editMode]);
 
@@ -309,7 +458,8 @@ function Surface3DScene({
       const rect = gl.domElement.getBoundingClientRect();
       return {
         x: clamp01((nativeEvent.clientX - rect.left) / rect.width) * rect.width,
-        y: clamp01((nativeEvent.clientY - rect.top) / rect.height) * rect.height,
+        y:
+          clamp01((nativeEvent.clientY - rect.top) / rect.height) * rect.height,
       };
     },
     [gl]
@@ -337,7 +487,8 @@ function Surface3DScene({
     for (const m of markerRender) {
       const w = new THREE.Vector3(m.worldX, m.worldY, m.worldZ);
       const sxy = projectWorldToScreen(w);
-      if (sxy.x >= x0 && sxy.x <= x1 && sxy.y >= y0 && sxy.y <= y1) hits.add(m.id);
+      if (sxy.x >= x0 && sxy.x <= x1 && sxy.y >= y0 && sxy.y <= y1)
+        hits.add(m.id);
     }
 
     setSelectedIds((prev) => {
@@ -376,7 +527,10 @@ function Surface3DScene({
               y,
               z,
             };
-            console.log("[Surface3D] add point requested (alt+click, surface hit)", pt);
+            console.log(
+              "[Surface3D] add point requested (alt+click, surface hit)",
+              pt
+            );
             onPointAdd?.(pt);
             return true;
           }
@@ -398,7 +552,8 @@ function Surface3DScene({
       const dx = Number(meshData?.domain?.dx);
       const dy = Number(meshData?.domain?.dy);
 
-      if (![xmin, xmax, ymin, ymax, gx, gy, dx, dy].every(Number.isFinite)) return false;
+      if (![xmin, xmax, ymin, ymax, gx, gy, dx, dy].every(Number.isFinite))
+        return false;
 
       const tx = (hit.x - xmin) / (xmax - xmin);
       const ty = (hit.z - ymin) / (ymax - ymin);
@@ -418,7 +573,10 @@ function Surface3DScene({
         y,
         z,
       };
-      console.log("[Surface3D] add point requested (alt+click, fallback snap)", pt);
+      console.log(
+        "[Surface3D] add point requested (alt+click, fallback snap)",
+        pt
+      );
       onPointAdd?.(pt);
       return true;
     },
@@ -433,7 +591,9 @@ function Surface3DScene({
 
       // Alt+드래그: 박스 선택, Alt+클릭: 포인트 생성(드래그 여부로 분기)
       e.stopPropagation();
-      try { e.nativeEvent.preventDefault?.(); } catch {}
+      try {
+        e.nativeEvent.preventDefault?.();
+      } catch {}
 
       // camera stop
       if (controlsRef.current) controlsRef.current.enabled = false;
@@ -495,7 +655,9 @@ function Surface3DScene({
       if (e.button !== 0) return;
 
       e.stopPropagation();
-      try { e.nativeEvent.preventDefault?.(); } catch {}
+      try {
+        e.nativeEvent.preventDefault?.();
+      } catch {}
 
       try {
         e.target.releasePointerCapture(e.pointerId);
@@ -541,7 +703,9 @@ function Surface3DScene({
       if (e.altKey) return; // Alt는 박스 선택/추가에 사용(충돌 방지)
 
       e.stopPropagation();
-      try { e.nativeEvent.preventDefault?.(); } catch {}
+      try {
+        e.nativeEvent.preventDefault?.();
+      } catch {}
 
       // 선택 집합 준비
       setSelectedIds((prev) => {
@@ -554,7 +718,9 @@ function Surface3DScene({
       if (controlsRef.current) controlsRef.current.enabled = false;
 
       // 현재 선택 ids 스냅샷
-      const ids = Array.from(selectedIds.has(markerId) ? selectedIds : new Set([markerId]));
+      const ids = Array.from(
+        selectedIds.has(markerId) ? selectedIds : new Set([markerId])
+      );
       const startById = new Map();
       for (const m of markers) {
         if (!m) continue;
@@ -565,7 +731,9 @@ function Surface3DScene({
 
       // 카메라 평행 드래그 평면(A안): normal = camera forward, point = marker world position
       const mr = markerRender.find((mm) => mm.id === markerId);
-      const pivot = mr ? new THREE.Vector3(mr.worldX, mr.worldY, mr.worldZ) : new THREE.Vector3(0, 0, 0);
+      const pivot = mr
+        ? new THREE.Vector3(mr.worldX, mr.worldY, mr.worldZ)
+        : new THREE.Vector3(0, 0, 0);
 
       const n = new THREE.Vector3();
       camera.getWorldDirection(n).normalize();
@@ -604,7 +772,9 @@ function Surface3DScene({
       const ids = dragGroupRef.current.ids;
 
       // 마커는 domain 좌표계: worldX = x, worldZ = y
-      const next = (Array.isArray(markers) ? markers : []).map((m) => ({ ...m }));
+      const next = (Array.isArray(markers) ? markers : []).map((m) => ({
+        ...m,
+      }));
       let touched = 0;
 
       for (let i = 0; i < next.length; i++) {
@@ -634,7 +804,9 @@ function Surface3DScene({
       if (!dragGroupRef.current.active) return;
 
       e.stopPropagation();
-      try { e.nativeEvent.preventDefault?.(); } catch {}
+      try {
+        e.nativeEvent.preventDefault?.();
+      } catch {}
 
       dragGroupRef.current.active = false;
 
@@ -653,9 +825,14 @@ function Surface3DScene({
   const handleMarkerContextMenu = useCallback(
     (e, markerId, index) => {
       e.stopPropagation();
-      try { e.nativeEvent.preventDefault?.(); } catch {}
+      try {
+        e.nativeEvent.preventDefault?.();
+      } catch {}
 
-      console.log("[Surface3D] remove point requested (right click)", { id: markerId, index });
+      console.log("[Surface3D] remove point requested (right click)", {
+        id: markerId,
+        index,
+      });
       onPointRemove?.({ id: markerId, index });
     },
     [onPointRemove]
@@ -674,17 +851,27 @@ function Surface3DScene({
     const b = combinedBounds ?? meshData?.bounds ?? null;
     if (!b) return "grid_null";
     return [
-      roundKey(b.xmin), roundKey(b.xmax),
-      roundKey(b.ymin), roundKey(b.ymax),
-      roundKey(b.zmin), roundKey(b.zmax),
-      String(gridMode), String(gridStep), String(minorDiv),
+      roundKey(b.xmin),
+      roundKey(b.xmax),
+      roundKey(b.ymin),
+      roundKey(b.ymax),
+      roundKey(b.zmin),
+      roundKey(b.zmax),
+      String(gridMode),
+      String(gridStep),
+      String(minorDiv),
     ].join("|");
   }, [combinedBounds, meshData?.bounds, gridMode, gridStep, minorDiv]);
 
   // HUD에서 보이는 z는 “현재 표면 위”로 표기(UX: 노드가 표면에 붙어 보이도록)
   const markerRenderWithSurfaceSnap = useMemo(() => {
     const b = combinedBounds ?? meshData?.bounds ?? null;
-    const span = b ? Math.max(1e-6, Math.max(b.xmax - b.xmin, b.ymax - b.ymin, b.zmax - b.zmin)) : 10;
+    const span = b
+      ? Math.max(
+          1e-6,
+          Math.max(b.xmax - b.xmin, b.ymax - b.ymin, b.zmax - b.zmin)
+        )
+      : 10;
     const zOffset = Math.max(0.01, span * 0.003); // 허용되는 “약간 떠 보이는” 오프셋
 
     return markerRender.map((m) => {
@@ -698,6 +885,33 @@ function Surface3DScene({
     });
   }, [markerRender, f, combinedBounds, meshData?.bounds]);
 
+  // ✅ Auto focus to AI-generated markers (when _focusNonce changes)
+  const lastFocusNonceRef = useRef(null);
+  useEffect(() => {
+    const nonce = getFocusNonceFromMarkers(markerRenderWithSurfaceSnap);
+    if (!nonce) return;
+    if (lastFocusNonceRef.current === nonce) return;
+    lastFocusNonceRef.current = nonce;
+
+    const pts = [];
+    for (const m of markerRenderWithSurfaceSnap || []) {
+      const x = Number(m?.worldX);
+      const y = Number(m?.worldY);
+      const z = Number(m?.worldZ);
+      if ([x, y, z].every(Number.isFinite))
+        pts.push(new THREE.Vector3(x, y, z));
+    }
+    if (!pts.length) return;
+
+    const box = new THREE.Box3().setFromPoints(pts);
+    fitCameraToBox({
+      camera,
+      controls: controlsRef.current,
+      box,
+      padding: 1.55,
+    });
+  }, [markerRenderWithSurfaceSnap, camera]);
+
   return (
     <>
       <ambientLight intensity={0.7} />
@@ -706,11 +920,22 @@ function Surface3DScene({
       <axesHelper args={[axesSize]} />
 
       {/* bounds 변경 시 key로 remount -> geometry 업데이트 불발 방지 */}
-      <CubeLatticeGrid key={gridKey} bounds={combinedBounds ?? meshData?.bounds} gridMode={gridMode} gridStep={gridStep} minorDiv={minorDiv} />
+      <CubeLatticeGrid
+        key={gridKey}
+        bounds={combinedBounds ?? meshData?.bounds}
+        gridMode={gridMode}
+        gridStep={gridStep}
+        minorDiv={minorDiv}
+      />
 
       {/* Surface mesh */}
       <mesh ref={surfaceRef} geometry={meshData.geometry}>
-        <meshStandardMaterial vertexColors roughness={0.6} metalness={0.05} side={THREE.DoubleSide} />
+        <meshStandardMaterial
+          vertexColors
+          roughness={0.6}
+          metalness={0.05}
+          side={THREE.DoubleSide}
+        />
       </mesh>
 
       {/* Interaction plane (Alt 편집 입력 전용; 표면 아래에 위치) */}
@@ -730,16 +955,20 @@ function Surface3DScene({
       {/* Nodes */}
       {markerRenderWithSurfaceSnap.map((m, idx) => {
         const isSelected = selectedIds.has(m.id);
-        const span = (combinedBounds ?? meshData?.bounds)
-          ? Math.max(
-              1e-6,
-              Math.max(
-                (combinedBounds ?? meshData?.bounds).xmax - (combinedBounds ?? meshData?.bounds).xmin,
-                (combinedBounds ?? meshData?.bounds).ymax - (combinedBounds ?? meshData?.bounds).ymin,
-                (combinedBounds ?? meshData?.bounds).zmax - (combinedBounds ?? meshData?.bounds).zmin
+        const span =
+          combinedBounds ?? meshData?.bounds
+            ? Math.max(
+                1e-6,
+                Math.max(
+                  (combinedBounds ?? meshData?.bounds).xmax -
+                    (combinedBounds ?? meshData?.bounds).xmin,
+                  (combinedBounds ?? meshData?.bounds).ymax -
+                    (combinedBounds ?? meshData?.bounds).ymin,
+                  (combinedBounds ?? meshData?.bounds).zmax -
+                    (combinedBounds ?? meshData?.bounds).zmin
+                )
               )
-            )
-          : 10;
+            : 10;
 
         const rBase = Math.max(0.06, Math.min(0.16, span * 0.015));
         const r = isSelected ? rBase * 1.25 : rBase;
@@ -754,7 +983,9 @@ function Surface3DScene({
                 // Alt+클릭 on marker: 선택 토글(Union: Ctrl/Cmd)
                 if (editMode && e.altKey && e.button === 0) {
                   e.stopPropagation();
-                  try { e.nativeEvent.preventDefault?.(); } catch {}
+                  try {
+                    e.nativeEvent.preventDefault?.();
+                  } catch {}
                   toggleSelectOne(m.id, Boolean(e.ctrlKey || e.metaKey));
                   return;
                 }
@@ -766,7 +997,11 @@ function Surface3DScene({
               onContextMenu={(e) => handleMarkerContextMenu(e, m.id, idx)}
             >
               <sphereGeometry args={[r, 24, 24]} />
-              <meshStandardMaterial color={isSelected ? "#60a5fa" : editMode ? "#22c55e" : "#ffc107"} />
+              <meshStandardMaterial
+                color={
+                  isSelected ? "#60a5fa" : editMode ? "#22c55e" : "#ffc107"
+                }
+              />
             </mesh>
 
             <Text
@@ -827,19 +1062,19 @@ export default function Surface3DCanvas({
 
   // 선택 박스 UI(HTML overlay)
   const [selectRectUI, setSelectRectUI] = useState(null);
-// ✅ 드래그 중 최신 markers 스냅샷 유지(최종 fit 시 stale markers 문제 방지)
-const latestMarkersRef = useRef(Array.isArray(markers) ? markers : []);
-useEffect(() => {
-  latestMarkersRef.current = Array.isArray(markers) ? markers : [];
-}, [markers]);
+  // ✅ 드래그 중 최신 markers 스냅샷 유지(최종 fit 시 stale markers 문제 방지)
+  const latestMarkersRef = useRef(Array.isArray(markers) ? markers : []);
+  useEffect(() => {
+    latestMarkersRef.current = Array.isArray(markers) ? markers : [];
+  }, [markers]);
 
-const emitMarkersChange = useCallback(
-  (nextMarkers, opts) => {
-    latestMarkersRef.current = Array.isArray(nextMarkers) ? nextMarkers : [];
-    onMarkersChange?.(nextMarkers, opts);
-  },
-  [onMarkersChange]
-);
+  const emitMarkersChange = useCallback(
+    (nextMarkers, opts) => {
+      latestMarkersRef.current = Array.isArray(nextMarkers) ? nextMarkers : [];
+      onMarkersChange?.(nextMarkers, opts);
+    },
+    [onMarkersChange]
+  );
 
   const emitPointAdd = useCallback(
     (pt) => {
@@ -994,7 +1229,12 @@ const emitMarkersChange = useCallback(
   // marker 렌더용 전처리 (domain -> world)
   const markerRender = useMemo(() => {
     const b = meshData.bounds;
-    const span = b ? Math.max(1e-6, Math.max(b.xmax - b.xmin, b.ymax - b.ymin, b.zmax - b.zmin)) : 10;
+    const span = b
+      ? Math.max(
+          1e-6,
+          Math.max(b.xmax - b.xmin, b.ymax - b.ymin, b.zmax - b.zmin)
+        )
+      : 10;
     const r = Math.max(0.06, Math.min(0.16, span * 0.015));
     const font = Math.max(0.18, Math.min(0.32, span * 0.02));
 
@@ -1007,7 +1247,9 @@ const emitMarkersChange = useCallback(
 
         return {
           id: m?.id ?? idx,
-          x, y, z,
+          x,
+          y,
+          z,
           worldX: x,
           worldY: z,
           worldZ: y,
@@ -1025,9 +1267,12 @@ const emitMarkersChange = useCallback(
     const b = meshData.bounds;
     if (!b) return null;
 
-    let xmin = b.xmin, xmax = b.xmax;
-    let ymin = b.ymin, ymax = b.ymax;
-    let zmin = b.zmin, zmax = b.zmax;
+    let xmin = b.xmin,
+      xmax = b.xmax;
+    let ymin = b.ymin,
+      ymax = b.ymax;
+    let zmin = b.zmin,
+      zmax = b.zmax;
 
     // markers 포함: 표시 z는 f(x,y) 우선(노드가 표면에 붙어 보이므로)
     for (const m of markerRender) {
@@ -1055,7 +1300,8 @@ const emitMarkersChange = useCallback(
 
   const commitFit = useCallback(() => {
     // 드래그 끝에서만 자동 fit(최종 1회)
-    const latest = latestMarkersRef.current ?? (Array.isArray(markers) ? markers : []);
+    const latest =
+      latestMarkersRef.current ?? (Array.isArray(markers) ? markers : []);
     emitMarkersChange(latest, { fit: true });
   }, [emitMarkersChange, markers]);
 
@@ -1064,7 +1310,13 @@ const emitMarkersChange = useCallback(
 
   return (
     <div
-      style={{ position: "relative", flex: 1, width: "100%", height: "100%", overflow: "hidden" }}
+      style={{
+        position: "relative",
+        flex: 1,
+        width: "100%",
+        height: "100%",
+        overflow: "hidden",
+      }}
       onContextMenu={(e) => {
         // 브라우저 기본 context menu 방지(요구사항 3)
         e.preventDefault();
@@ -1073,7 +1325,9 @@ const emitMarkersChange = useCallback(
       <Canvas
         camera={{ position: [6, 6, 6], fov: 45 }}
         style={{ width: "100%", height: "100%" }}
-        onCreated={({ gl }) => gl.setClearColor(new THREE.Color("#0f1115"), 1.0)}
+        onCreated={({ gl }) =>
+          gl.setClearColor(new THREE.Color("#0f1115"), 1.0)
+        }
       >
         <Surface3DScene
           expr={expr}
@@ -1128,7 +1382,9 @@ const emitMarkersChange = useCallback(
           zIndex: 10,
         }}
       >
-        <div style={{ fontWeight: 700, marginBottom: 4 }}>Surface3D (Alt Editing)</div>
+        <div style={{ fontWeight: 700, marginBottom: 4 }}>
+          Surface3D (Alt Editing)
+        </div>
         <div style={{ opacity: 0.9 }}>
           Alt+Click: Add point (surface snap) · RightClick: Remove point
           <br />

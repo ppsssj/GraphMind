@@ -2115,8 +2115,16 @@ export default function Studio() {
         }
 
         // Apply markers first
-        updateCurve3D(tabId, { markers: nextMarkers });
-        log("curve3d markers applied", { tabId, count: nextMarkers.length });
+        const focusNonce = Date.now();
+        const markersForState = nextMarkers.map((m) => ({
+          ...m,
+          _focusNonce: focusNonce,
+        }));
+        updateCurve3D(tabId, { markers: markersForState });
+        log("curve3d markers applied", {
+          tabId,
+          count: markersForState.length,
+        });
 
         // Optional: commit a new curve from markers (requires explicit action)
         const wantsFit = commands.some(
@@ -2129,7 +2137,7 @@ export default function Studio() {
           const baseYExpr = c3.baseYExpr ?? c3.yExpr ?? "0";
           const baseZExpr = c3.baseZExpr ?? c3.zExpr ?? "0";
           const fitPatch = aiFitCurve3DFromMarkers({
-            markers: nextMarkers,
+            markers: markersForState,
             baseXExpr,
             baseYExpr,
             baseZExpr,
@@ -2503,8 +2511,16 @@ export default function Studio() {
           warn("unsupported action for surface3d", action);
         }
 
-        updateSurface3D(tabId, { markers: nextMarkers });
-        log("surface3d markers applied", { tabId, count: nextMarkers.length });
+        const focusNonce = Date.now();
+        const markersForState = nextMarkers.map((m) => ({
+          ...m,
+          _focusNonce: focusNonce,
+        }));
+        updateSurface3D(tabId, { markers: markersForState });
+        log("surface3d markers applied", {
+          tabId,
+          count: markersForState.length,
+        });
 
         const wantsFit = commands.some(
           (c) =>

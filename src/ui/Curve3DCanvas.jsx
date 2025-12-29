@@ -58,6 +58,93 @@ function coordLabel(m) {
 }
 
 // -----------------------------
+// auto-focus (zoom to markers) utils
+// - triggers only when markers contain _focusNonce (set by AI commands in Studio)
+// -----------------------------
+function fitCameraToBox({
+  camera,
+  controls,
+  box,
+  padding = 1.35,
+  minZoomFactor = 0.85,
+  minRadius = 0.75,
+}) {
+  if (!box) return;
+
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+
+  // Use bounding sphere for stable sizing (Box3 size can be ~0 for a single point)
+  const sphere = new THREE.Sphere();
+  box.getBoundingSphere(sphere);
+
+  let radius = Number(sphere.radius);
+  if (!Number.isFinite(radius) || radius < 1e-6) radius = minRadius;
+
+  const fov = THREE.MathUtils.degToRad(camera.fov || 50);
+  const desiredDist = (radius / Math.sin(fov / 2)) * padding;
+
+  const curTarget =
+    controls?.target && controls.target.clone
+      ? controls.target.clone()
+      : new THREE.Vector3(0, 0, 0);
+  const curDist = camera.position.distanceTo(curTarget);
+
+  // Prevent over-zoom-in: never get closer than a fraction of the current distance.
+  const dist = Math.max(desiredDist, curDist * minZoomFactor);
+
+  // Keep current view direction
+  const dir = camera.position.clone().sub(curTarget);
+  if (dir.lengthSq() < 1e-12) dir.set(1, 1, 1);
+  dir.normalize();
+
+  camera.position.copy(center.clone().add(dir.multiplyScalar(dist)));
+  camera.near = Math.max(0.01, dist / 200);
+  camera.far = Math.max(50, dist * 200);
+  camera.updateProjectionMatrix?.();
+
+  if (controls) {
+    controls.target.copy(center);
+    controls.update?.();
+  }
+}
+
+function AutoFocusOnMarkers3D({ markers, controlsRef }) {
+  const { camera } = useThree();
+  const lastNonceRef = useRef(null);
+
+  useEffect(() => {
+    const ms = Array.isArray(markers) ? markers : [];
+    // focus only when Studio tagged markers with _focusNonce
+    const nonces = ms
+      .map((m) => m?._focusNonce)
+      .filter((v) => v !== undefined && v !== null);
+    if (!nonces.length) return;
+
+    const nonce = nonces[0]; // all markers in a batch share the same nonce
+    if (lastNonceRef.current === nonce) return;
+    lastNonceRef.current = nonce;
+
+    const pts = [];
+    for (const m of ms) {
+      const x = Number(m?.x),
+        y = Number(m?.y),
+        z = Number(m?.z);
+      if ([x, y, z].every(Number.isFinite))
+        pts.push(new THREE.Vector3(x, y, z));
+    }
+    if (!pts.length) return;
+
+    const box = new THREE.Box3().setFromPoints(pts);
+    const controls = controlsRef?.current;
+    fitCameraToBox({ camera, controls, box, padding: 1.45 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [markers]);
+
+  return null;
+}
+
+// -----------------------------
 // safe event utils
 // -----------------------------
 function safePreventContextMenu(e) {
@@ -928,7 +1015,7 @@ function DraggableMarker3D({
         position={
           new THREE.Vector3(marker.x ?? 0, marker.y ?? 0, marker.z ?? 0)
         }
-        label={marker?.label ? String(marker.label) : coordLabel(marker)}
+        label={coordLabel(marker)}
       />
     </group>
   );
@@ -996,7 +1083,7 @@ function EditableMarker3D({
         position={
           new THREE.Vector3(marker.x ?? 0, marker.y ?? 0, marker.z ?? 0)
         }
-        label={marker?.label ? String(marker.label) : coordLabel(marker)}
+        label={coordLabel(marker)}
       />
     </group>
   );
@@ -1576,6 +1663,10 @@ export default function Curve3DCanvas({
           );
         })}
 
+        <AutoFocusOnMarkers3D
+          markers={displayMarkers}
+          controlsRef={controlsRef}
+        />
         <OrbitControls
           ref={controlsRef}
           makeDefault
