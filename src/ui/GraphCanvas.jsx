@@ -69,6 +69,82 @@ function CameraControlBridge({
   return null;
 }
 
+function AutoFocus2D({ markers, controlsRef, enabled = true }) {
+  const { camera, viewport } = useThree();
+  const lastSigRef = useRef(null);
+
+  useEffect(() => {
+    if (!enabled) return;
+
+    const ms = Array.isArray(markers) ? markers : [];
+    if (ms.length === 0) return;
+
+    // Prefer AI focus nonce if present; otherwise fall back to a lightweight signature.
+    const sig = ms
+      .map((m, i) => String(m?._focusNonce ?? m?.id ?? `${i}:${m?.x},${m?.y}`))
+      .join("|");
+
+    if (sig === lastSigRef.current) return;
+    lastSigRef.current = sig;
+
+    let minX = Infinity,
+      maxX = -Infinity,
+      minY = Infinity,
+      maxY = -Infinity;
+
+    for (const m of ms) {
+      const x = Number(m?.x);
+      const y = Number(m?.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+    }
+
+    if (!Number.isFinite(minX) || !Number.isFinite(minY)) return;
+
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+
+    const newTarget = new THREE.Vector3(cx, cy, 0);
+
+    const oldTarget =
+      controlsRef?.current?.target?.clone?.() ?? new THREE.Vector3(0, 0, 0);
+    const offset = camera.position.clone().sub(oldTarget);
+
+    // Move camera keeping the current view direction/offset, and retarget controls.
+    camera.position.copy(newTarget.clone().add(offset));
+    camera.lookAt(newTarget);
+    if (controlsRef?.current?.target)
+      controlsRef.current.target.copy(newTarget);
+
+    // Soft zoom: only a tiny zoom-in (or zoom-out if needed) to ensure visibility.
+    // Clamp prevents over-zoom on single-point markers.
+    const padding = 1.35;
+    const spanX = Math.max(0.25, (maxX - minX) * padding);
+    const spanY = Math.max(0.25, (maxY - minY) * padding);
+
+    const fitFactor = Math.min(viewport.width / spanX, viewport.height / spanY);
+    const currentZoom = Number(camera.zoom) || 60;
+
+    let nextZoom = currentZoom * fitFactor;
+
+    const MAX_ZOOM_IN_FACTOR = 1.03; // <= 3% zoom-in
+    const MAX_ZOOM_OUT_FACTOR = 0.8; // allow zoom-out if marker is out of view
+
+    nextZoom = Math.min(currentZoom * MAX_ZOOM_IN_FACTOR, nextZoom);
+    nextZoom = Math.max(currentZoom * MAX_ZOOM_OUT_FACTOR, nextZoom);
+
+    // Keep existing zoom clamps consistent with CameraControlBridge.zoomBy
+    camera.zoom = Math.max(20, Math.min(260, nextZoom));
+    camera.updateProjectionMatrix();
+    controlsRef?.current?.update?.();
+  }, [markers, enabled, camera, viewport.width, viewport.height, controlsRef]);
+
+  return null;
+}
+
 function buildLineSegments(segments) {
   // segments: [[x1,y1,z1,x2,y2,z2], ...]
   const arr = new Float32Array(segments.length * 6);
@@ -219,12 +295,18 @@ function GridAndAxes({
 
       {/* axes */}
       <mesh position={[cx, cy, zAxis]}>
-        <boxGeometry key={`axisx-${sizeX}-${axisThickness}`} args={[sizeX, axisThickness, axisThickness]} />
+        <boxGeometry
+          key={`axisx-${sizeX}-${axisThickness}`}
+          args={[sizeX, axisThickness, axisThickness]}
+        />
         <meshStandardMaterial color="#6039BC" />
       </mesh>
 
       <mesh position={[cx, cy, zAxis]}>
-        <boxGeometry key={`axisy-${sizeY}-${axisThickness}`} args={[axisThickness, sizeY, axisThickness]} />
+        <boxGeometry
+          key={`axisy-${sizeY}-${axisThickness}`}
+          args={[axisThickness, sizeY, axisThickness]}
+        />
         <meshStandardMaterial color="#6039BC" />
       </mesh>
     </group>
@@ -813,7 +895,6 @@ export default function GraphCanvas({
         .join("|")
     : "";
 
-
   // Alt key tracking (for OrbitControls disable + UI)
   useEffect(() => {
     const onKeyDown = (ev) => {
@@ -1127,6 +1208,13 @@ export default function GraphCanvas({
         }
       >
         <CameraControlBridge cameraApiRef={cameraApiRef} />
+
+        {/* ✅ Auto focus on newly created markers (AI results) */}
+        <AutoFocus2D
+          markers={markers}
+          controlsRef={controlsRef}
+          enabled={true}
+        />
 
         <ambientLight intensity={0.7} />
         <directionalLight position={[3, 5, 6]} intensity={0.9} />
