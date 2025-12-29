@@ -1,5 +1,5 @@
 // src/ui/Surface3DView.jsx
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Surface3DCanvas from "./Surface3DCanvas";
 import { create, all } from "mathjs";
 
@@ -54,10 +54,10 @@ function fitSurfacePolynomial(markers, degree) {
   const d = Math.max(1, Math.min(6, Math.floor(Number(degree) || 2)));
   const pts = (Array.isArray(markers) ? markers : [])
     .map((m) => ({ x: Number(m?.x), y: Number(m?.y), z: Number(m?.z) }))
-    .filter((p) => [p.x, p.y, p.z].every(Number.isFinite));
-
-  const need = requiredPointCount(d);
-  if (pts.length < need) return { ok: false, reason: `points 부족 (${pts.length}/${need})` };
+    .filter((p) => [p.x, p.y, p.z].every(Number.isFinite));  const need = requiredPointCount(d);
+  // NOTE: pts.length < need 이어도 ridge(λ)로 해를 구할 수 있으므로, 편집 UX를 위해 제한을 두지 않습니다.
+  // (예: degree=2인데 포인트가 5개인 경우에도 표면이 업데이트되도록)
+  if (pts.length < 1) return { ok: false, reason: `points 부족 (${pts.length})` };
 
   const basis = [];
   for (let i = 0; i <= d; i++) {
@@ -136,6 +136,35 @@ export default function Surface3DView({
     };
   }, [surface3d]);
 
+
+// ✅ 드래그 중 100ms throttled fit (preview), 드래그 끝에서 1회 final fit
+// - previewExpr는 로컬 상태로만 유지하여 Undo/Redo 히스토리 오염을 방지합니다.
+const [previewExpr, setPreviewExpr] = useState(null);
+const lastFitTsRef = useRef(0);
+const pendingTimerRef = useRef(null);
+const lastMarkersRef = useRef(null);
+
+const clearPending = useCallback(() => {
+  if (pendingTimerRef.current) {
+    clearTimeout(pendingTimerRef.current);
+    pendingTimerRef.current = null;
+  }
+}, []);
+
+useEffect(() => {
+  // 외부에서 expr/degree가 바뀌면 preview는 해제
+  setPreviewExpr(null);
+  clearPending();
+  lastFitTsRef.current = 0;
+  lastMarkersRef.current = null;
+}, [merged.expr, merged.degree, clearPending]);
+
+useEffect(() => {
+  return () => {
+    clearPending();
+  };
+}, [clearPending]);
+
   const commit = useCallback(
     (patch) => {
       onChange?.(patch);
@@ -144,17 +173,58 @@ export default function Surface3DView({
   );
 
   const handleMarkersChange = useCallback(
-    (nextMarkers, { fit = false } = {}) => {
-      commit({ markers: nextMarkers });
+  (nextMarkers, { fit = false } = {}) => {
+    commit({ markers: nextMarkers });
+    lastMarkersRef.current = nextMarkers;
 
-      // 기존 규칙 유지: drag 끝에서만 fit 요청이 오면 expr 갱신
-      if (fit) {
-        const res = fitSurfacePolynomial(nextMarkers, merged.degree);
-        if (res.ok) commit({ expr: res.expr });
+    if (!merged.editMode) return;
+
+    const doFit = (ms, { final } = { final: false }) => {
+      const res = fitSurfacePolynomial(ms, merged.degree);
+      if (res.ok) {
+        if (final) {
+          commit({ expr: res.expr });
+          setPreviewExpr(null);
+        } else {
+          setPreviewExpr(res.expr);
+        }
+      } else if (final) {
+        console.warn("[Surface3DView] surface fit failed:", res.reason);
+        setPreviewExpr(null);
       }
-    },
-    [commit, merged.degree]
-  );
+    };
+
+    // ✅ 드래그 끝: 최종 1회 fit + state 반영
+    if (fit) {
+      clearPending();
+      doFit(nextMarkers, { final: true });
+      return;
+    }
+
+    // ✅ 드래그 중: 100ms마다 preview fit
+    const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+    const interval = 100;
+    const elapsed = now - (lastFitTsRef.current || 0);
+
+    if (elapsed >= interval) {
+      lastFitTsRef.current = now;
+      doFit(nextMarkers, { final: false });
+      return;
+    }
+
+    if (!pendingTimerRef.current) {
+      pendingTimerRef.current = setTimeout(() => {
+        pendingTimerRef.current = null;
+        const latest = lastMarkersRef.current;
+        if (!latest) return;
+        const t = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+        lastFitTsRef.current = t;
+        doFit(latest, { final: false });
+      }, Math.max(0, interval - elapsed));
+    }
+  },
+  [commit, merged.degree, merged.editMode, clearPending]
+);
 
   // ✅ Point Add/Remove: Studio에서 내려오면 그대로 사용, 아니면 View에서 markers 패치로 fallback
   const handlePointAdd = useCallback(
@@ -195,7 +265,7 @@ export default function Surface3DView({
   return (
     <div className="graph-view">
       <Surface3DCanvas
-        expr={merged.expr}
+        expr={previewExpr ?? merged.expr}
         baseExpr={merged.baseExpr}
         xMin={merged.xMin}
         xMax={merged.xMax}

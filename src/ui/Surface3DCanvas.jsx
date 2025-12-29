@@ -459,7 +459,7 @@ function Surface3DScene({
     (e) => {
       if (!editMode) return;
       if (!e.altKey) return;
-      if (!altClickCandidateRef.current.active) return;
+      if (!altClickCandidateRef.current.active && !selectingRef.current) return;
 
       e.stopPropagation();
 
@@ -827,6 +827,19 @@ export default function Surface3DCanvas({
 
   // 선택 박스 UI(HTML overlay)
   const [selectRectUI, setSelectRectUI] = useState(null);
+// ✅ 드래그 중 최신 markers 스냅샷 유지(최종 fit 시 stale markers 문제 방지)
+const latestMarkersRef = useRef(Array.isArray(markers) ? markers : []);
+useEffect(() => {
+  latestMarkersRef.current = Array.isArray(markers) ? markers : [];
+}, [markers]);
+
+const emitMarkersChange = useCallback(
+  (nextMarkers, opts) => {
+    latestMarkersRef.current = Array.isArray(nextMarkers) ? nextMarkers : [];
+    onMarkersChange?.(nextMarkers, opts);
+  },
+  [onMarkersChange]
+);
 
   const emitPointAdd = useCallback(
     (pt) => {
@@ -1041,9 +1054,10 @@ export default function Surface3DCanvas({
   }, [meshData.bounds, markerRender, f]);
 
   const commitFit = useCallback(() => {
-    // 드래그 끝에서만 자동 fit(기존 규칙 유지)
-    onMarkersChange?.(Array.isArray(markers) ? markers : [], { fit: true });
-  }, [markers, onMarkersChange]);
+    // 드래그 끝에서만 자동 fit(최종 1회)
+    const latest = latestMarkersRef.current ?? (Array.isArray(markers) ? markers : []);
+    emitMarkersChange(latest, { fit: true });
+  }, [emitMarkersChange, markers]);
 
   // HUD용
   const nodeCount = Array.isArray(markers) ? markers.length : 0;
@@ -1075,7 +1089,7 @@ export default function Surface3DCanvas({
           degree={degree}
           onPointAdd={emitPointAdd}
           onPointRemove={emitPointRemove}
-          onMarkersChange={onMarkersChange}
+          onMarkersChange={emitMarkersChange}
           onCommit={commitFit}
           setSelectRectUI={setSelectRectUI}
         />
