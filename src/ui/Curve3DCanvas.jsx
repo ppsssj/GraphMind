@@ -47,6 +47,17 @@ function coordLabel(m) {
   return `(${fmtNum(m?.x)}, ${fmtNum(m?.y)}, ${fmtNum(m?.z)})`;
 }
 
+
+// -----------------------------
+// safe event utils
+// -----------------------------
+function safePreventContextMenu(e) {
+  try { e?.stopPropagation?.(); } catch {}
+  try { e?.nativeEvent?.stopPropagation?.(); } catch {}
+  try { e?.nativeEvent?.preventDefault?.(); } catch {}
+  try { e?.preventDefault?.(); } catch {}
+}
+
 // -----------------------------
 // bbox utils (for local grid)
 // -----------------------------
@@ -96,7 +107,7 @@ function snapBBoxToStep(b, step) {
 // -----------------------------
 // robust line component (positions update)
 // -----------------------------
-function Line3D({ positions, color = "#22c55e", linewidth = 2 }) {
+function Line3D({ positions, color = "#22c55e", linewidth = 2, lineObjRef }) {
   const geomRef = useRef(null);
 
   useEffect(() => {
@@ -109,15 +120,249 @@ function Line3D({ positions, color = "#22c55e", linewidth = 2 }) {
   if (!positions) return null;
 
   return (
-    <line>
+    <line ref={lineObjRef}>
       <bufferGeometry ref={geomRef} />
       <lineBasicMaterial color={color} linewidth={linewidth} />
     </line>
   );
 }
 
-// -----------------------------
-// axes + cube grid
+
+
+function AltClickAddMarker({
+  enabled = true,
+  editLineRef,
+  baseLineRef,
+  tMin,
+  tMax,
+  addMarkerAt,
+  suppressRef,
+  // ✅ for box selection UI + selection set
+  markers = [],
+  onMarqueeChange = () => {},
+  onSelectKeys = () => {},
+  onAltGestureActiveChange = () => {},
+}) {
+  const { camera, gl, scene } = useThree();
+  const raycaster = useMemo(() => new THREE.Raycaster(), []);
+  const ndc = useMemo(() => new THREE.Vector2(), []);
+  // reusable helpers for snapping pointer hit to nearest segment
+  const segA = useMemo(() => new THREE.Vector3(), []);
+  const segB = useMemo(() => new THREE.Vector3(), []);
+  const snap = useMemo(() => new THREE.Vector3(), []);
+  const line3 = useMemo(() => new THREE.Line3(), []);
+  const tmpV = useMemo(() => new THREE.Vector3(), []);
+
+  const pendingRef = useRef(null); // {pointerId,startX,startY,x,y,moved}
+
+  useEffect(() => {
+    const el = gl.domElement;
+    if (!el) return;
+
+    // ✅ 브라우저 기본 우클릭 메뉴 방지
+    const onContextMenu = (ev) => {
+      ev.preventDefault();
+    };
+
+    const setMarquee = (x0, y0, x1, y1) => {
+      onMarqueeChange?.({ active: true, x0, y0, x1, y1 });
+    };
+    const clearMarquee = () => onMarqueeChange?.(null);
+
+    const projectToCanvasPx = (world) => {
+      const rect = el.getBoundingClientRect();
+      tmpV.copy(world).project(camera);
+      return {
+        x: (tmpV.x * 0.5 + 0.5) * rect.width,
+        y: (-tmpV.y * 0.5 + 0.5) * rect.height,
+      };
+    };
+
+    const computeKeysInRect = (x0, y0, x1, y1) => {
+      const minX = Math.min(x0, x1);
+      const maxX = Math.max(x0, x1);
+      const minY = Math.min(y0, y1);
+      const maxY = Math.max(y0, y1);
+
+      const out = [];
+      const ms = Array.isArray(markers) ? markers : [];
+      for (let i = 0; i < ms.length; i++) {
+        const m = ms[i];
+        const wx = Number(m?.x) || 0;
+        const wy = Number(m?.y) || 0;
+        const wz = Number(m?.z) || 0;
+
+        const p = projectToCanvasPx(new THREE.Vector3(wx, wy, wz));
+        if (p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY) {
+          out.push(m?.id ?? i);
+        }
+      }
+      return out;
+    };
+
+    const doRaycastAddMarker = (clientX, clientY) => {
+      const rect = el.getBoundingClientRect();
+      ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      ndc.y = -(((clientY - rect.top) / rect.height) * 2 - 1);
+
+      raycaster.setFromCamera(ndc, camera);
+
+      // ✅ marker 위에서 시작한 Alt 제스처는 "추가/박스"를 하지 않음
+      const anyHits = raycaster.intersectObjects(scene.children, true);
+      if (anyHits?.length) {
+        const hit0 = anyHits[0];
+        if (hit0?.object?.userData?.__gmMarker) return;
+      }
+
+      raycaster.params.Line = raycaster.params.Line || {};
+      raycaster.params.Line.threshold = 0.35;
+
+      const pick = (ref) => {
+        const obj = ref?.current;
+        if (!obj) return null;
+        const hits = raycaster.intersectObject(obj, true);
+        return hits && hits.length ? hits[0] : null;
+      };
+
+      // edit 곡선 우선, 없으면 base
+      const hit = pick(editLineRef) || pick(baseLineRef);
+      if (!hit?.point) return;
+
+      const obj = hit.object;
+      const posAttr = obj?.geometry?.attributes?.position;
+      const vCount = posAttr?.count || 0;
+      if (vCount < 2) return;
+
+      // ✅ Line Raycast hit.point가 "라인 위 점"이 아닐 수 있어서, 실제 세그먼트 위로 다시 스냅
+      const segIndex0 = Math.max(0, Math.min(vCount - 2, Number.isFinite(hit.index) ? hit.index : 0));
+
+      segA.fromBufferAttribute(posAttr, segIndex0).applyMatrix4(obj.matrixWorld);
+      segB.fromBufferAttribute(posAttr, segIndex0 + 1).applyMatrix4(obj.matrixWorld);
+
+      line3.set(segA, segB);
+      line3.closestPointToPoint(hit.point, true, snap);
+
+      const segLen = segA.distanceTo(segB);
+      const frac = segLen > 1e-9 ? snap.distanceTo(segA) / segLen : 0;
+      const alpha = Math.max(0, Math.min(1, (segIndex0 + frac) / (vCount - 1)));
+
+      const t = Number(tMin) + (Number(tMax) - Number(tMin)) * alpha;
+
+      addMarkerAt?.({ t, x: snap.x, y: snap.y, z: snap.z });
+    };
+
+    const onPointerDown = (ev) => {
+      if (!enabled) return;
+      if (ev.button !== 0) return; // left click only
+      if (!ev.altKey) return; // ✅ Alt + 클릭/드래그만
+      if (suppressRef?.current) return;
+
+      // Alt 제스처 동안 카메라 비활성화(키 이벤트 누락 대비)
+      onAltGestureActiveChange?.(true);
+
+      const rect = el.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+
+      pendingRef.current = { pointerId: ev.pointerId, startX: x, startY: y, x, y, moved: false };
+
+      setMarquee(x, y, x, y);
+
+      try {
+        el.setPointerCapture(ev.pointerId);
+      } catch {}
+
+      // 브라우저/컨트롤 기본 동작 방지
+      try { ev.preventDefault(); } catch {}
+    };
+
+    const onPointerMove = (ev) => {
+      const p = pendingRef.current;
+      if (!p) return;
+      if (ev.pointerId !== p.pointerId) return;
+
+      const rect = el.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+
+      p.x = x;
+      p.y = y;
+
+      const dx = x - p.startX;
+      const dy = y - p.startY;
+      const dist2 = dx * dx + dy * dy;
+
+      if (!p.moved && dist2 > 16) p.moved = true; // 4px threshold
+      setMarquee(p.startX, p.startY, x, y);
+
+      try { ev.preventDefault(); } catch {}
+    };
+
+    const finalize = (ev) => {
+      const p = pendingRef.current;
+      if (!p) return;
+      if (ev.pointerId !== p.pointerId) return;
+
+      pendingRef.current = null;
+
+      clearMarquee();
+      onAltGestureActiveChange?.(false);
+
+      try {
+        el.releasePointerCapture(ev.pointerId);
+      } catch {}
+
+      // ✅ Alt+클릭: 마커 추가
+      if (!p.moved) {
+        doRaycastAddMarker(ev.clientX, ev.clientY);
+        return;
+      }
+
+      // ✅ Alt+드래그: 박스 내부 마커들을 "클릭된 것처럼" 선택 처리
+      const keys = computeKeysInRect(p.startX, p.startY, p.x, p.y);
+      if (keys.length > 0) onSelectKeys?.(keys);
+    };
+
+    el.addEventListener("contextmenu", onContextMenu);
+    el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", finalize);
+    el.addEventListener("pointercancel", finalize);
+
+    return () => {
+      el.removeEventListener("contextmenu", onContextMenu);
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", finalize);
+      el.removeEventListener("pointercancel", finalize);
+    };
+  }, [
+    enabled,
+    gl,
+    camera,
+    scene,
+    raycaster,
+    ndc,
+    editLineRef,
+    baseLineRef,
+    tMin,
+    tMax,
+    addMarkerAt,
+    suppressRef,
+    markers,
+    onMarqueeChange,
+    onSelectKeys,
+    onAltGestureActiveChange,
+    segA,
+    segB,
+    snap,
+    line3,
+    tmpV,
+  ]);
+
+  return null;
+}
+
 // -----------------------------
 function Axes3D({ size = 6, gridMode = "major", gridStep = 1, minorDiv = 4, bbox = null }) {
   return (
@@ -317,7 +562,20 @@ function MarkerCurve({ markers }) {
   return <Line3D positions={positions} color="#22c55e" linewidth={2} />;
 }
 
-function DraggableMarker3D({ marker, markerKey, onSelect, isSelected, onChange, onDragEnd, setControlsBusy }) {
+function DraggableMarker3D({
+  marker,
+  markerKey,
+  markers,
+  selectedKeys,
+  onMarkersChange,
+  onRemove,
+  onSelect,
+  isSelected,
+  onChange,
+  onDragEnd,
+  setControlsBusy,
+  suppressAltClick,
+}) {
   const meshRef = useRef();
   const { camera, gl } = useThree();
   const [hovered, setHovered] = useState(false);
@@ -330,16 +588,62 @@ function DraggableMarker3D({ marker, markerKey, onSelect, isSelected, onChange, 
   const ndc = useMemo(() => new THREE.Vector2(), []);
   const hit = useMemo(() => new THREE.Vector3(), []);
 
+  // { group:boolean, selIdxs:number[], startHit:Vector3, startAll:[{x,y,z}] }
+  const dragStartRef = useRef(null);
+
   // ✅ 선택/비선택 색: 초록/노랑
   const baseColor = isSelected ? "#22c55e" : "#facc15";
   const hoverColor = isSelected ? "#34d399" : "#fde047";
 
+  const keyOf = (mm, idx) => mm?.id ?? idx;
+
   const onPointerDown = (e) => {
     e.stopPropagation();
-    onSelect?.(markerKey);
+    suppressAltClick?.();
+
+    // ✅ "이미 박스 선택된 노드"를 드래그하는 경우: 선택을 유지해야 그룹 이동이 됨
+    if (!isSelected) if (!isSelected) onSelect?.(markerKey);
 
     setDragging(true);
     setControlsBusy?.(true);
+
+    // intersect plane (screen drag)
+    const rect = gl.domElement.getBoundingClientRect();
+    ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    ndc.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
+
+    raycaster.setFromCamera(ndc, camera);
+
+    const normal = new THREE.Vector3();
+    camera.getWorldDirection(normal);
+    plane.setFromNormalAndCoplanarPoint(normal, meshRef.current.position);
+
+    const ok = raycaster.ray.intersectPlane(plane, hit);
+    if (ok) {
+      // ✅ 그룹 이동 대상: "박스 선택된 노드들" (Alt 누를 필요 없음)
+      const sel = selectedKeys instanceof Set && selectedKeys.size > 0 && isSelected ? selectedKeys : new Set([markerKey]);
+
+      const selIdxs = [];
+      const ms = Array.isArray(markers) ? markers : [];
+      for (let i = 0; i < ms.length; i++) {
+        const k = keyOf(ms[i], i);
+        if (sel.has(k)) selIdxs.push(i);
+      }
+
+      dragStartRef.current = {
+        group: selIdxs.length > 0 && typeof onMarkersChange === "function",
+        selIdxs,
+        startHit: hit.clone(),
+        startAll: ms.map((mm) => ({
+          x: Number(mm?.x) || 0,
+          y: Number(mm?.y) || 0,
+          z: Number(mm?.z) || 0,
+        })),
+      };
+    } else {
+      dragStartRef.current = { group: false };
+    }
+
     try {
       e.target.setPointerCapture(e.pointerId);
     } catch {}
@@ -360,7 +664,31 @@ function DraggableMarker3D({ marker, markerKey, onSelect, isSelected, onChange, 
     plane.setFromNormalAndCoplanarPoint(normal, meshRef.current.position);
 
     const ok = raycaster.ray.intersectPlane(plane, hit);
-    if (ok) onChange?.(markerKey, { x: hit.x, y: hit.y, z: hit.z });
+    if (!ok) return;
+
+    // ✅ 그룹 이동: "선택된(selIdxs) 노드만" 동일 Δ 적용
+    if (
+      dragStartRef.current?.group &&
+      dragStartRef.current?.startHit &&
+      Array.isArray(dragStartRef.current?.startAll) &&
+      Array.isArray(dragStartRef.current?.selIdxs)
+    ) {
+      const d = new THREE.Vector3().subVectors(hit, dragStartRef.current.startHit);
+      const startAll = dragStartRef.current.startAll;
+      const selSet = new Set(dragStartRef.current.selIdxs);
+
+      const next = (markers || []).map((mm, i) => {
+        const s0 = startAll[i] || { x: 0, y: 0, z: 0 };
+        if (!selSet.has(i)) return { ...mm, x: s0.x, y: s0.y, z: s0.z };
+        return { ...mm, x: s0.x + d.x, y: s0.y + d.y, z: s0.z + d.z };
+      });
+
+      onMarkersChange?.(next);
+      return;
+    }
+
+    // ✅ 단일 이동(기존)
+    onChange?.(markerKey, { x: hit.x, y: hit.y, z: hit.z });
   };
 
   const onPointerUp = (e) => {
@@ -379,25 +707,24 @@ function DraggableMarker3D({ marker, markerKey, onSelect, isSelected, onChange, 
       <mesh
         ref={meshRef}
         position={[marker.x ?? 0, marker.y ?? 0, marker.z ?? 0]}
+        userData={{ __gmMarker: true, markerKey }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerOver={(e) => (e.stopPropagation(), setHovered(true))}
         onPointerOut={(e) => (e.stopPropagation(), setHovered(false))}
+        onContextMenu={(e) => (safePreventContextMenu(e), onRemove?.(markerKey))}
       >
         <sphereGeometry args={[0.14, 18, 18]} />
         <meshStandardMaterial color={hovered ? hoverColor : baseColor} />
       </mesh>
 
-      <MarkerLabel
-        position={new THREE.Vector3(marker.x ?? 0, marker.y ?? 0, marker.z ?? 0)}
-        label={coordLabel(marker)}
-      />
+      <MarkerLabel position={new THREE.Vector3(marker.x ?? 0, marker.y ?? 0, marker.z ?? 0)} label={coordLabel(marker)} />
     </group>
   );
 }
 
-function EditableMarker3D({ marker, markerKey, onSelect, isSelected, onChange, onDragEnd, setControlsBusy }) {
+function EditableMarker3D({ marker, markerKey, onRemove, onSelect, isSelected, onChange, onDragEnd, setControlsBusy, suppressAltClick }) {
   const objRef = useRef();
   const [hovered, setHovered] = useState(false);
   useCursor(hovered || isSelected);
@@ -419,7 +746,8 @@ function EditableMarker3D({ marker, markerKey, onSelect, isSelected, onChange, o
 
   const handleSelect = (e) => {
     e.stopPropagation();
-    onSelect?.(markerKey);
+    suppressAltClick?.();
+    if (!isSelected) onSelect?.(markerKey);
   };
 
   return (
@@ -428,9 +756,11 @@ function EditableMarker3D({ marker, markerKey, onSelect, isSelected, onChange, o
       <mesh
         ref={objRef}
         position={[marker.x ?? 0, marker.y ?? 0, marker.z ?? 0]}
+        userData={{ __gmMarker: true, markerKey }}
         onPointerDown={handleSelect}
         onPointerOver={(e) => (e.stopPropagation(), setHovered(true))}
         onPointerOut={(e) => (e.stopPropagation(), setHovered(false))}
+        onContextMenu={(e) => (safePreventContextMenu(e), onRemove?.(markerKey))}
       >
         <sphereGeometry args={[0.14, 18, 18]} />
         <meshStandardMaterial color={hovered ? hoverColor : baseColor} />
@@ -464,6 +794,7 @@ export default function Curve3DCanvas({
 
   markers = [],
   onMarkerChange,
+  onMarkersChange,
   onRecalculateExpressions,
   editMode = "drag",
 
@@ -495,15 +826,24 @@ export default function Curve3DCanvas({
     return ms.map((m, idx) => m?.id ?? idx);
   }, [markers]);
 
-  const [selectedKey, setSelectedKey] = useState(null);
+  const [selectedKeys, setSelectedKeys] = useState(() => new Set());
 
-  useEffect(() => {
-    if (selectedKey == null) {
-      if (markerKeys.length > 0) setSelectedKey(markerKeys[0]);
-      return;
-    }
-    if (!markerKeys.includes(selectedKey) && markerKeys.length > 0) setSelectedKey(markerKeys[0]);
-  }, [markerKeys, selectedKey]);
+// keep selection valid when markers change
+useEffect(() => {
+  setSelectedKeys((prev) => {
+    const valid = new Set(markerKeys);
+    const base = prev instanceof Set ? prev : new Set();
+    const next = new Set();
+    for (const k of base) if (valid.has(k)) next.add(k);
+    if (next.size === 0 && markerKeys.length > 0) next.add(markerKeys[0]);
+    return next;
+  });
+}, [markerKeys]);
+
+const selectedKey = useMemo(() => {
+  const it = selectedKeys.values().next();
+  return it.done ? null : it.value;
+}, [selectedKeys]);
 
   // base curve positions
   const basePositions = useMemo(() => {
@@ -634,6 +974,58 @@ export default function Curve3DCanvas({
   }, [gridMode, editPositions, basePositions, gridStep]);
 
   const [controlsBusy, setControlsBusy] = useState(false);
+  const controlsBusyRef = useRef(false);
+  useEffect(() => {
+    controlsBusyRef.current = controlsBusy;
+  }, [controlsBusy]);
+
+
+  const editLineRef = useRef(null);
+  const baseLineRef = useRef(null);
+
+  // ✅ Alt+클릭 추가에서 마커 클릭/드래그와 충돌 방지
+  const suppressAltClickRef = useRef(false);
+  const suppressAltClick = () => {
+    suppressAltClickRef.current = true;
+    requestAnimationFrame(() => {
+      suppressAltClickRef.current = false;
+    });
+  };
+
+  // ✅ 키 상태(TransformControls에서도 사용 가능)
+  const [altDown, setAltDown] = useState(false);
+const [marqueeBox, setMarqueeBox] = useState(null);
+const [altGestureActive, setAltGestureActive] = useState(false);
+
+  useEffect(() => {
+    const onKeyDown = (ev) => {
+      if (ev.key === "Alt") {
+        setAltDown(true);
+        // 키 입력 순간에도 OrbitControls 비활성화(첫 프레임 카메라 이동 방지)
+        if (controlsRef.current) controlsRef.current.enabled = false;
+      }
+    };
+    const onKeyUp = (ev) => {
+      if (ev.key === "Alt") {
+        setAltDown(false);
+        if (controlsRef.current) controlsRef.current.enabled = !controlsBusyRef.current;
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, []);
+
+  // ✅ Alt 조작 중에는 카메라(OrbitControls)가 절대 움직이지 않도록 즉시 반영
+  useEffect(() => {
+    if (!controlsRef.current) return;
+    controlsRef.current.enabled = !(controlsBusy || altDown);
+  }, [controlsBusy, altDown]);
+
+
 
   const keyToIndex = useMemo(() => {
     const map = new Map();
@@ -641,6 +1033,46 @@ export default function Curve3DCanvas({
     ms.forEach((m, idx) => map.set(m?.id ?? idx, idx));
     return map;
   }, [markers]);
+
+  const makeId = () => {
+    try {
+      return crypto.randomUUID();
+    } catch {
+      return `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+  };
+
+  const removeMarkerByKey = (markerKey) => {
+  const idx = keyToIndex.get(markerKey);
+  if (typeof idx !== "number") return;
+  const ms = Array.isArray(markers) ? markers : [];
+  const next = ms.filter((_, i) => i !== idx);
+  onMarkersChange?.(next);
+  setSelectedKeys((prev) => {
+    if (!(prev instanceof Set)) return prev;
+    const ns = new Set(prev);
+    ns.delete(markerKey);
+    return ns;
+  });
+};
+
+
+  const addMarkerAt = ({ t, x, y, z }) => {
+    const ms = Array.isArray(markers) ? markers : [];
+    const next = [
+      ...ms,
+      {
+        id: makeId(),
+        t: typeof t === "number" && Number.isFinite(t) ? t : undefined,
+        x: Number.isFinite(x) ? x : 0,
+        y: Number.isFinite(y) ? y : 0,
+        z: Number.isFinite(z) ? z : 0,
+      },
+    ];
+    onMarkersChange?.(next);
+  };
+
+
 
   const handleMarkerChangeByKey = (markerKey, pos) => {
     const idx = keyToIndex.get(markerKey);
@@ -745,6 +1177,7 @@ export default function Curve3DCanvas({
         width: "100%",
         height: "100%",
         overflow: "hidden",
+        position: "relative",
         background: "#020617",
         borderRadius: 16,
         border: "1px solid rgba(148, 163, 184, 0.25)",
@@ -758,29 +1191,45 @@ export default function Curve3DCanvas({
         <ambientLight intensity={0.7} />
         <directionalLight position={[5, 8, 3]} intensity={1.2} />
 
+        <AltClickAddMarker
+          enabled={typeof onMarkersChange === "function"}
+          editLineRef={editLineRef}
+          baseLineRef={baseLineRef}
+          tMin={tMin}
+          tMax={tMax}
+          addMarkerAt={addMarkerAt}
+          suppressRef={suppressAltClickRef}
+          markers={displayMarkers}
+          onMarqueeChange={setMarqueeBox}
+          onSelectKeys={(keys) => setSelectedKeys(new Set(keys))}
+          onAltGestureActiveChange={setAltGestureActive}
+        />
+
         {/* ✅ Major/Full일 때는 bbox 기반 로컬 격자 */}
         <Axes3D size={6} gridMode={gridMode} gridStep={gridStep} minorDiv={minorDiv} bbox={localGridBBox} />
 
         {/* 기준(회색) */}
-        <Line3D positions={basePositions} color="#9ca3af" linewidth={1} />
+        <Line3D positions={basePositions} color="#9ca3af" linewidth={1} lineObjRef={baseLineRef} />
 
         {/* 편집(녹색 라인): 노드 기반 프리뷰 */}
-        <Line3D positions={editPositions} color="#22c55e" linewidth={2} />
+        <Line3D positions={editPositions} color="#22c55e" linewidth={2} lineObjRef={editLineRef} />
 
         {/* 마커 연결선 토글 */}
         {showMarkerPolyline && <MarkerCurve markers={displayMarkers} />}
 
         {displayMarkers.map((m, idx) => {
           const markerKey = m?.id ?? idx;
-          const isSelected = selectedKey === markerKey;
+          const isSelected = selectedKeys.has(markerKey);
 
           return editMode === "arrows" ? (
             <EditableMarker3D
               key={markerKey}
               marker={m}
               markerKey={markerKey}
-              onSelect={setSelectedKey}
+              onRemove={removeMarkerByKey}
+              onSelect={(k) => setSelectedKeys(new Set([k]))}
               isSelected={isSelected}
+              suppressAltClick={suppressAltClick}
               onChange={handleMarkerChangeByKey}
               onDragEnd={handleMarkerDragEnd}
               setControlsBusy={setControlsBusy}
@@ -790,8 +1239,13 @@ export default function Curve3DCanvas({
               key={markerKey}
               marker={m}
               markerKey={markerKey}
-              onSelect={setSelectedKey}
+              markers={displayMarkers}
+              selectedKeys={selectedKeys}
+              onMarkersChange={onMarkersChange}
+              onRemove={removeMarkerByKey}
+              onSelect={(k) => setSelectedKeys(new Set([k]))}
               isSelected={isSelected}
+              suppressAltClick={suppressAltClick}
               onChange={handleMarkerChangeByKey}
               onDragEnd={handleMarkerDragEnd}
               setControlsBusy={setControlsBusy}
@@ -799,9 +1253,25 @@ export default function Curve3DCanvas({
           );
         })}
 
-        <OrbitControls ref={controlsRef} makeDefault enabled={!controlsBusy} enableDamping dampingFactor={0.08} />
+        <OrbitControls ref={controlsRef} makeDefault enabled={!controlsBusy && !altDown && !altGestureActive} enableDamping dampingFactor={0.08} />
         <OrientationOverlay controlsRef={controlsRef} />
       </Canvas>
+
+      {marqueeBox?.active && (
+        <div
+          style={{
+            position: "absolute",
+            left: Math.min(marqueeBox.x0, marqueeBox.x1),
+            top: Math.min(marqueeBox.y0, marqueeBox.y1),
+            width: Math.abs(marqueeBox.x1 - marqueeBox.x0),
+            height: Math.abs(marqueeBox.y1 - marqueeBox.y0),
+            border: "1px dashed rgba(148, 163, 184, 0.9)",
+            background: "rgba(56, 189, 248, 0.08)",
+            borderRadius: 6,
+            pointerEvents: "none",
+          }}
+        />
+      )}
     </div>
   );
 }

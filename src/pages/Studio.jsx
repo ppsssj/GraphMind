@@ -11,6 +11,7 @@ import Array3DView from "../ui/Array3DView";
 import Curve3DView from "../ui/Curve3DView";
 import Surface3DView from "../ui/Surface3DView";
 import { dummyEquations, dummyResources } from "../data/dummyEquations";
+import { studioReducer, initialStudioState, actions } from "../state/studioReducer";
 import "../styles/Studio.css";
 import AIPanel from "../components/ai/AIPanel";
 const math = create(all, {});
@@ -51,6 +52,79 @@ function exprToFn(raw) {
     return () => NaN;
   }
 }
+
+const cloneMarkers = (arr) =>
+  Array.isArray(arr) ? arr.map((m) => ({ ...m })) : [];
+
+const cloneCurve3D = (c) => ({
+  ...(c || {}),
+  markers: cloneMarkers(c?.markers),
+});
+
+const cloneSurface3D = (s) => ({
+  ...(s || {}),
+  markers: cloneMarkers(s?.markers),
+});
+
+const curve3DSnapshotChanged = (a, b) => {
+  const ax = String(a?.xExpr ?? "");
+  const ay = String(a?.yExpr ?? "");
+  const az = String(a?.zExpr ?? "");
+  const bx = String(b?.xExpr ?? "");
+  const by = String(b?.yExpr ?? "");
+  const bz = String(b?.zExpr ?? "");
+  if (ax !== bx || ay !== by || az !== bz) return true;
+
+  const am = Array.isArray(a?.markers) ? a.markers : [];
+  const bm = Array.isArray(b?.markers) ? b.markers : [];
+  if (am.length !== bm.length) return true;
+  for (let i = 0; i < am.length; i++) {
+    const p = am[i] || {};
+    const q = bm[i] || {};
+    if (
+      p.id !== q.id ||
+      p.t !== q.t ||
+      p.x !== q.x ||
+      p.y !== q.y ||
+      p.z !== q.z
+    )
+      return true;
+  }
+  return false;
+};
+
+const surface3DSnapshotChanged = (a, b) => {
+  if (String(a?.expr ?? "") !== String(b?.expr ?? "")) return true;
+
+  const am = Array.isArray(a?.markers) ? a.markers : [];
+  const bm = Array.isArray(b?.markers) ? b.markers : [];
+  if (am.length !== bm.length) return true;
+  for (let i = 0; i < am.length; i++) {
+    const p = am[i] || {};
+    const q = bm[i] || {};
+    if (p.id !== q.id || p.x !== q.x || p.y !== q.y || p.z !== q.z)
+      return true;
+  }
+  return false;
+};
+
+const isCurve3DCommitPatch = (patch) => {
+  if (!patch || typeof patch !== "object") return false;
+  return (
+    "xExpr" in patch ||
+    "yExpr" in patch ||
+    "zExpr" in patch ||
+    "baseXExpr" in patch ||
+    "baseYExpr" in patch ||
+    "baseZExpr" in patch
+  );
+};
+
+const isSurface3DCommitPatch = (patch) => {
+  if (!patch || typeof patch !== "object") return false;
+  return "expr" in patch;
+};
+
 
 function fitPolyCoeffs(xs, ys, degree) {
   const V = xs.map((x) => {
@@ -635,6 +709,203 @@ export default function Studio() {
 
   const [equationExpr, setEquationExpr] = useState(initialFormula);
 
+
+// ── Undo/Redo for equation-point (node) moves: per-tab history ─────────────
+const tabStateRef = useRef(null);
+const tabsRef = useRef(null);
+const historyByTabRef = useRef({});
+const dragTxnRef = useRef(null);
+
+useEffect(() => {
+  tabStateRef.current = tabState;
+}, [tabState]);
+
+useEffect(() => {
+  tabsRef.current = tabs;
+}, [tabs]);
+
+const ensureHistory = useCallback((tabId) => {
+  const map = historyByTabRef.current;
+  if (!map[tabId]) map[tabId] = { undo: [], redo: [] };
+  return map[tabId];
+}, []);
+
+
+const beginMoveTxn = useCallback((tabId) => {
+  if (!tabId) return;
+  const cur = tabStateRef.current?.[tabId];
+  if (!cur || cur.type !== "equation") return;
+  if (
+    dragTxnRef.current &&
+    dragTxnRef.current.tabId === tabId &&
+    dragTxnRef.current.kind === "equation"
+  )
+    return;
+
+  dragTxnRef.current = {
+    tabId,
+    kind: "equation",
+    before: {
+      equation: cur.equation,
+      points: cur.points.map((p) => ({ ...p })),
+    },
+    vaultId: cur.vaultId ?? null,
+  };
+}, []);
+
+const beginCurve3DTxn = useCallback((tabId) => {
+  if (!tabId) return;
+  const cur = tabStateRef.current?.[tabId];
+  if (!cur || cur.type !== "curve3d") return;
+  if (
+    dragTxnRef.current &&
+    dragTxnRef.current.tabId === tabId &&
+    dragTxnRef.current.kind === "curve3d"
+  )
+    return;
+
+  dragTxnRef.current = {
+    tabId,
+    kind: "curve3d",
+    before: {
+      curve3d: cloneCurve3D(cur.curve3d),
+    },
+    vaultId: cur.vaultId ?? null,
+  };
+}, []);
+
+const beginSurface3DTxn = useCallback((tabId) => {
+  if (!tabId) return;
+  const cur = tabStateRef.current?.[tabId];
+  if (!cur || cur.type !== "surface3d") return;
+  if (
+    dragTxnRef.current &&
+    dragTxnRef.current.tabId === tabId &&
+    dragTxnRef.current.kind === "surface3d"
+  )
+    return;
+
+  dragTxnRef.current = {
+    tabId,
+    kind: "surface3d",
+    before: {
+      surface3d: cloneSurface3D(cur.surface3d),
+    },
+    vaultId: cur.vaultId ?? null,
+  };
+}, []);
+
+const finalizeMoveTxn = useCallback(
+  (tabId) => {
+    const txn = dragTxnRef.current;
+    if (!txn || txn.tabId !== tabId) return;
+
+    const cur = tabStateRef.current?.[tabId];
+    if (!cur) {
+      dragTxnRef.current = null;
+      return;
+    }
+
+    const kind = txn.kind ?? cur.type;
+    const before = txn.before;
+
+    if (kind === "equation") {
+      if (cur.type !== "equation") {
+        dragTxnRef.current = null;
+        return;
+      }
+
+      const after = {
+        equation: cur.equation,
+        points: cur.points.map((p) => ({ ...p })),
+      };
+
+      const changedEq = before.equation !== after.equation;
+      const changedPts =
+        before.points.length !== after.points.length ||
+        before.points.some((p, i) => {
+          const q = after.points[i];
+          return !q || p.x !== q.x || p.y !== q.y;
+        });
+
+      if (changedEq || changedPts) {
+        const hist = ensureHistory(tabId);
+        hist.undo.push({ kind: "equation", before, after, vaultId: txn.vaultId });
+        hist.redo.length = 0;
+      }
+
+      dragTxnRef.current = null;
+      return;
+    }
+
+    if (kind === "curve3d") {
+      if (cur.type !== "curve3d") {
+        dragTxnRef.current = null;
+        return;
+      }
+
+      const after = { curve3d: cloneCurve3D(cur.curve3d) };
+      if (curve3DSnapshotChanged(before.curve3d, after.curve3d)) {
+        const hist = ensureHistory(tabId);
+        hist.undo.push({ kind: "curve3d", before, after, vaultId: txn.vaultId });
+        hist.redo.length = 0;
+      }
+
+      dragTxnRef.current = null;
+      return;
+    }
+
+    if (kind === "surface3d") {
+      if (cur.type !== "surface3d") {
+        dragTxnRef.current = null;
+        return;
+      }
+
+      const after = { surface3d: cloneSurface3D(cur.surface3d) };
+      if (surface3DSnapshotChanged(before.surface3d, after.surface3d)) {
+        const hist = ensureHistory(tabId);
+        hist.undo.push({ kind: "surface3d", before, after, vaultId: txn.vaultId });
+        hist.redo.length = 0;
+      }
+
+      dragTxnRef.current = null;
+      return;
+    }
+
+    // unknown kind
+    dragTxnRef.current = null;
+  },
+  [ensureHistory]
+);
+
+const scheduleFinalizeMoveTxn = useCallback(
+  (tabId) => {
+    requestAnimationFrame(() => finalizeMoveTxn(tabId));
+  },
+  [finalizeMoveTxn]
+);
+
+useEffect(() => {
+  const onMouseUp = () => {
+    const txn = dragTxnRef.current;
+    if (!txn?.tabId) return;
+
+    // equation: commit immediately on mouseup
+    if (txn.kind === "equation") {
+      scheduleFinalizeMoveTxn(txn.tabId);
+      return;
+    }
+
+    // curve3d/surface3d: drag-end commit patch may arrive a bit later
+    const tabId = txn.tabId;
+    window.setTimeout(() => finalizeMoveTxn(tabId), 120);
+  };
+
+  window.addEventListener("mouseup", onMouseUp);
+  return () => window.removeEventListener("mouseup", onMouseUp);
+}, [finalizeMoveTxn, scheduleFinalizeMoveTxn]);
+
+
   // ── 탭에서 poly-fit 파생 데이터 ────────────────────────
   // ✅ Vault localStorage + state 안 수식 업데이트
   const updateVaultFormula = useCallback((vaultId, newEquation) => {
@@ -657,6 +928,145 @@ export default function Studio() {
       return next;
     });
   }, []);
+
+
+const applySnapshotToTab = useCallback(
+  (tabId, snap, kind, vaultIdForUpdate) => {
+    if (!tabId || !snap) return;
+
+    setTabState((st) => {
+      const cur = st[tabId];
+      if (!cur) return st;
+
+      const k = kind ?? cur.type ?? "equation";
+
+      if (k === "equation" && cur.type === "equation") {
+        return {
+          ...st,
+          [tabId]: {
+            ...cur,
+            equation: normalizeFormula(snap.equation),
+            points: (snap.points || []).map((p) => ({ ...p })),
+            ruleError: null,
+            ver: (cur.ver ?? 0) + 1,
+          },
+        };
+      }
+
+      if (k === "curve3d" && cur.type === "curve3d") {
+        const nextCurve3d = cloneCurve3D(snap.curve3d ?? snap);
+        return {
+          ...st,
+          [tabId]: {
+            ...cur,
+            curve3d: { ...(cur.curve3d || {}), ...nextCurve3d },
+            ver: (cur.ver ?? 0) + 1,
+          },
+        };
+      }
+
+      if (k === "surface3d" && cur.type === "surface3d") {
+        const nextSurface3d = cloneSurface3D(snap.surface3d ?? snap);
+        return {
+          ...st,
+          [tabId]: {
+            ...cur,
+            surface3d: { ...(cur.surface3d || {}), ...nextSurface3d },
+            ver: (cur.ver ?? 0) + 1,
+          },
+        };
+      }
+
+      return st;
+    });
+
+    // equation 전용: 상단 입력/탭 제목/Vault 동기화
+    if ((kind ?? "equation") === "equation") {
+      const normEq = normalizeFormula(snap.equation);
+      setEquationExpr(normEq);
+
+      setTabs((t) => {
+        const prev = t.byId?.[tabId];
+        if (!prev) return t;
+        return {
+          ...t,
+          byId: {
+            ...t.byId,
+            [tabId]: { ...prev, title: titleFromFormula(normEq) },
+          },
+        };
+      });
+
+      if (vaultIdForUpdate) updateVaultFormula(vaultIdForUpdate, normEq);
+    }
+  },
+  [updateVaultFormula]
+);
+const undoMove = useCallback(() => {
+  const tabId = panes?.[focusedPane]?.activeId;
+  if (!tabId) return;
+
+  const cur = tabStateRef.current?.[tabId];
+  if (!cur) return;
+
+  // cancel pending txn
+  dragTxnRef.current = null;
+
+  const hist = ensureHistory(tabId);
+  const entry = hist.undo.pop();
+  if (!entry) return;
+
+  hist.redo.push(entry);
+
+  const kind = entry.kind ?? cur.type ?? "equation";
+  applySnapshotToTab(tabId, entry.before, kind, entry.vaultId ?? cur.vaultId);
+}, [applySnapshotToTab, ensureHistory, focusedPane, panes]);
+
+const redoMove = useCallback(() => {
+  const tabId = panes?.[focusedPane]?.activeId;
+  if (!tabId) return;
+
+  const cur = tabStateRef.current?.[tabId];
+  if (!cur) return;
+
+  // cancel pending txn
+  dragTxnRef.current = null;
+
+  const hist = ensureHistory(tabId);
+  const entry = hist.redo.pop();
+  if (!entry) return;
+
+  hist.undo.push(entry);
+
+  const kind = entry.kind ?? cur.type ?? "equation";
+  applySnapshotToTab(tabId, entry.after, kind, entry.vaultId ?? cur.vaultId);
+}, [applySnapshotToTab, ensureHistory, focusedPane, panes]);
+
+useEffect(() => {
+  const onKeyDown = (e) => {
+    // Ignore when typing in inputs/textareas/contenteditable
+    const el = document.activeElement;
+    const tag = el?.tagName?.toLowerCase?.();
+    if (tag === "input" || tag === "textarea" || el?.isContentEditable) return;
+
+    const isMac = navigator.platform?.toUpperCase?.().includes("MAC");
+    const mod = isMac ? e.metaKey : e.ctrlKey;
+    if (!mod) return;
+
+    const k = String(e.key || "").toLowerCase();
+    if (k === "z" && !e.shiftKey) {
+      e.preventDefault();
+      undoMove();
+    } else if ((k === "z" && e.shiftKey) || k === "y") {
+      e.preventDefault();
+      redoMove();
+    }
+  };
+
+  window.addEventListener("keydown", onKeyDown);
+  return () => window.removeEventListener("keydown", onKeyDown);
+}, [undoMove, redoMove]);
+
 
   const deriveFor = useCallback(
     (tabId) => {
@@ -687,6 +1097,8 @@ export default function Studio() {
         const cur = tabState[tabId];
         if (!cur || cur.type !== "equation") return;
 
+        beginMoveTxn(tabId);
+
         const pts = Array.isArray(pointsOverride) ? pointsOverride : cur.points;
         const ruleMode = cur.ruleMode ?? "free";
         const polyDegree = cur.rulePolyDegree ?? cur.degree;
@@ -700,6 +1112,7 @@ export default function Studio() {
               ruleError: res.message ?? "규칙 적용 실패",
             },
           }));
+          scheduleFinalizeMoveTxn(tabId);
           return;
         }
 
@@ -712,6 +1125,7 @@ export default function Studio() {
               ver: (st[tabId].ver ?? 0) + 1,
             },
           }));
+          scheduleFinalizeMoveTxn(tabId);
           return;
         }
 
@@ -738,6 +1152,8 @@ export default function Studio() {
           },
         }));
         updateVaultFormula(cur.vaultId, nextEq);
+
+        scheduleFinalizeMoveTxn(tabId);
       };
 
       return {
@@ -782,17 +1198,20 @@ export default function Studio() {
 
         points: s.points,
         curveKey: coeffs.map((c) => c.toFixed(6)).join("|") + `|v${s.ver ?? 0}`,
-        updatePoint: (idx, xy) =>
-          setTabState((st) => {
-            const cur = st[tabId];
-            const nextPts = cur.points.map((p, i) =>
-              i === idx ? { ...p, ...xy } : p
-            );
-            return {
-              ...st,
-              [tabId]: { ...cur, points: nextPts },
-            };
-          }),
+        
+updatePoint: (idx, xy) => {
+  beginMoveTxn(tabId);
+  setTabState((st) => {
+    const cur = st[tabId];
+    const nextPts = cur.points.map((p, i) =>
+      i === idx ? { ...p, ...xy } : p
+    );
+    return {
+      ...st,
+      [tabId]: { ...cur, points: nextPts },
+    };
+  });
+},
         commitRule,
 
         ruleMode: s.ruleMode ?? "free",
@@ -802,7 +1221,7 @@ export default function Studio() {
         ruleError: s.ruleError ?? null,
       };
     },
-    [tabState, updateVaultFormula]
+    [tabState, updateVaultFormula, beginMoveTxn, scheduleFinalizeMoveTxn]
   );
 
   // ── AI graph commands: extrema/roots/intersections → markers ─────────────────
@@ -1520,36 +1939,122 @@ export default function Studio() {
   const updateCurve3D = useCallback(
     (tabId, patch) => {
       if (!tabId) return;
-      setTabState((st) => ({
-        ...st,
-        [tabId]: {
-          ...st[tabId],
-          curve3d: {
-            ...(st[tabId]?.curve3d || {}),
-            ...patch,
+
+      // marker 이동/추가/삭제 등: 트랜잭션 시작
+      if (patch && typeof patch === "object" && "markers" in patch) {
+        beginCurve3DTxn(tabId);
+      }
+
+      const commitLike = isCurve3DCommitPatch(patch);
+
+      setTabState((st) => {
+        const cur = st[tabId];
+        if (!cur || cur.type !== "curve3d") return st;
+
+        const nextCurve3d = {
+          ...(cur.curve3d || {}),
+          ...patch,
+        };
+
+        const next = {
+          ...st,
+          [tabId]: {
+            ...cur,
+            curve3d: nextCurve3d,
+            ver: (cur.ver ?? 0) + 1,
           },
-        },
-      }));
+        };
+
+        // drag-end에서 수식 패치가 들어오면(=commitLike) 즉시 히스토리 커밋
+        const txn = dragTxnRef.current;
+        if (
+          commitLike &&
+          txn &&
+          txn.tabId === tabId &&
+          txn.kind === "curve3d"
+        ) {
+          const before = txn.before;
+          const after = { curve3d: cloneCurve3D(nextCurve3d) };
+
+          if (curve3DSnapshotChanged(before.curve3d, after.curve3d)) {
+            const hist = ensureHistory(tabId);
+            hist.undo.push({
+              kind: "curve3d",
+              before,
+              after,
+              vaultId: txn.vaultId,
+            });
+            hist.redo.length = 0;
+          }
+
+          dragTxnRef.current = null;
+        }
+
+        return next;
+      });
     },
-    [setTabState]
+    [beginCurve3DTxn, ensureHistory]
   );
 
   // ✅ surface3d 상태 업데이트 (SSOT: Studio)
   const updateSurface3D = useCallback(
     (tabId, patch) => {
       if (!tabId) return;
-      setTabState((st) => ({
-        ...st,
-        [tabId]: {
-          ...st[tabId],
-          surface3d: {
-            ...(st[tabId]?.surface3d || {}),
-            ...patch,
+
+      // marker 이동/추가/삭제 등: 트랜잭션 시작
+      if (patch && typeof patch === "object" && "markers" in patch) {
+        beginSurface3DTxn(tabId);
+      }
+
+      const commitLike = isSurface3DCommitPatch(patch);
+
+      setTabState((st) => {
+        const cur = st[tabId];
+        if (!cur || cur.type !== "surface3d") return st;
+
+        const nextSurface3d = {
+          ...(cur.surface3d || {}),
+          ...patch,
+        };
+
+        const next = {
+          ...st,
+          [tabId]: {
+            ...cur,
+            surface3d: nextSurface3d,
+            ver: (cur.ver ?? 0) + 1,
           },
-        },
-      }));
+        };
+
+        // fit 결과 expr 패치가 들어오면(=commitLike) 즉시 히스토리 커밋
+        const txn = dragTxnRef.current;
+        if (
+          commitLike &&
+          txn &&
+          txn.tabId === tabId &&
+          txn.kind === "surface3d"
+        ) {
+          const before = txn.before;
+          const after = { surface3d: cloneSurface3D(nextSurface3d) };
+
+          if (surface3DSnapshotChanged(before.surface3d, after.surface3d)) {
+            const hist = ensureHistory(tabId);
+            hist.undo.push({
+              kind: "surface3d",
+              before,
+              after,
+              vaultId: txn.vaultId,
+            });
+            hist.redo.length = 0;
+          }
+
+          dragTxnRef.current = null;
+        }
+
+        return next;
+      });
     },
-    [setTabState]
+    [beginSurface3DTxn, ensureHistory]
   );
 
   const applyEquation = () => {

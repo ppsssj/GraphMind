@@ -35,6 +35,10 @@ export default function Curve3DView({ curve3d, onChange }) {
     next[index] = { ...prev, ...pos };
     onChange?.({ markers: next });
   };
+  const handleMarkersChange = (nextMarkers) => {
+    onChange?.({ markers: Array.isArray(nextMarkers) ? nextMarkers : [] });
+  };
+
 
   const handleRecalculateExpressions = (patch) => {
     onChange?.(patch);
@@ -57,6 +61,7 @@ export default function Curve3DView({ curve3d, onChange }) {
         minorDiv={merged.minorDiv}
         markers={merged.markers}
         onMarkerChange={handleMarkerChange}
+        onMarkersChange={handleMarkersChange}
         onRecalculateExpressions={handleRecalculateExpressions}
         editMode={merged.editMode}
         deformSigma={merged.deformSigma}
