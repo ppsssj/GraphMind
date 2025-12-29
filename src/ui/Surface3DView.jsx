@@ -1,14 +1,34 @@
 // src/ui/Surface3DView.jsx
+// Throttled fit (100ms preview) + final fit on drag end,
+// with "stay close to original" constraint via delta-fitting + anchor regularization.
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Surface3DCanvas from "./Surface3DCanvas";
 import { create, all } from "mathjs";
 
 const mathjs = create(all, {});
 
-// (i+j<=d) 항의 개수 = (d+1)(d+2)/2
-function requiredPointCount(deg) {
-  const d = Math.max(1, Math.min(6, Math.floor(Number(deg) || 2)));
-  return ((d + 1) * (d + 2)) / 2;
+function stripEq(expr) {
+  const s = String(expr ?? "");
+  return s.includes("=") ? s.split("=").pop().trim() : s.trim();
+}
+
+function makeScalarFn(expr) {
+  const rhs = stripEq(expr || "0") || "0";
+  try {
+    const compiled = mathjs.compile(rhs);
+    return (x, y) => {
+      try {
+        const v = compiled.evaluate({ x, y });
+        const num = Number(v);
+        return Number.isFinite(num) ? num : 0;
+      } catch {
+        return 0;
+      }
+    };
+  } catch {
+    return () => 0;
+  }
 }
 
 function fmtCoef(x) {
@@ -28,9 +48,7 @@ function buildPolyExpr(terms) {
     const coefStr = fmtCoef(abs);
 
     const factors = [];
-    if (!(abs === 1 && (t.i !== 0 || t.j !== 0))) {
-      factors.push(coefStr);
-    }
+    if (!(abs === 1 && (t.i !== 0 || t.j !== 0))) factors.push(coefStr);
     if (t.i > 0) factors.push(t.i === 1 ? "x" : `x^${t.i}`);
     if (t.j > 0) factors.push(t.j === 1 ? "y" : `y^${t.j}`);
 
@@ -39,75 +57,100 @@ function buildPolyExpr(terms) {
   }
 
   if (!parts.length) return "0";
-
   let expr = `${parts[0].sign === "-" ? "-" : ""}${parts[0].body}`;
   for (let k = 1; k < parts.length; k++) expr += ` ${parts[k].sign} ${parts[k].body}`;
   return expr;
 }
 
 /**
- * markers: [{id, x, y, z}]
- * degree: 1~6
- * 최소제곱으로 다항식 표면 피팅 후 expr 문자열 반환
+ * "원래 수식에서 크게 벗어나는" 문제를 줄이기 위한 접근
+ * - base(x,y) 위에 delta(x,y) (다항식)만 학습
+ * - 앵커 포인트(도메인 그리드)에 delta=0을 약하게 걸어 전체 형태가 과도하게 휘는 것을 방지
+ * - ridge(λ)로 계수 폭주 방지
  */
-function fitSurfacePolynomial(markers, degree) {
+function fitSurfaceDeltaPolynomial(markers, degree, baseFn, domain, opts = {}) {
   const d = Math.max(1, Math.min(6, Math.floor(Number(degree) || 2)));
+  const base = typeof baseFn === "function" ? baseFn : (() => 0);
+
+  const markerWeight = Number.isFinite(opts.markerWeight) ? opts.markerWeight : 1.0;
+  const anchorWeight = Number.isFinite(opts.anchorWeight) ? opts.anchorWeight : 0.25; // ↑ 더 크면 더 "원본 고정"
+  const lambda = Number.isFinite(opts.lambda) ? opts.lambda : 1e-4; // ↑ 더 크면 더 "강성"
+  const anchorGrid = Math.max(3, Math.min(20, Math.floor(opts.anchorGrid ?? 10)));
+
   const pts = (Array.isArray(markers) ? markers : [])
     .map((m) => ({ x: Number(m?.x), y: Number(m?.y), z: Number(m?.z) }))
-    .filter((p) => [p.x, p.y, p.z].every(Number.isFinite));  const need = requiredPointCount(d);
-  // NOTE: pts.length < need 이어도 ridge(λ)로 해를 구할 수 있으므로, 편집 UX를 위해 제한을 두지 않습니다.
-  // (예: degree=2인데 포인트가 5개인 경우에도 표면이 업데이트되도록)
-  if (pts.length < 1) return { ok: false, reason: `points 부족 (${pts.length})` };
+    .filter((p) => [p.x, p.y].every(Number.isFinite) && Number.isFinite(p.z));
+
+  if (pts.length < 1) return { ok: false, reason: "points 부족" };
 
   const basis = [];
   for (let i = 0; i <= d; i++) {
     for (let j = 0; j <= d - i; j++) basis.push({ i, j });
   }
-
-  const N = pts.length;
   const M = basis.length;
 
+  // rows = marker rows + anchor rows
+  const rows = [];
+  for (const p of pts) {
+    const r = p.z - base(p.x, p.y);
+    rows.push({ x: p.x, y: p.y, r, w: markerWeight });
+  }
+
+  // anchors: delta ≈ 0
+  if (domain && Number.isFinite(domain.xMin) && Number.isFinite(domain.xMax) && Number.isFinite(domain.yMin) && Number.isFinite(domain.yMax)) {
+    const xmin = domain.xMin;
+    const xmax = domain.xMax;
+    const ymin = domain.yMin;
+    const ymax = domain.yMax;
+    for (let iy = 0; iy < anchorGrid; iy++) {
+      const ty = anchorGrid === 1 ? 0.5 : iy / (anchorGrid - 1);
+      const y = ymin + (ymax - ymin) * ty;
+      for (let ix = 0; ix < anchorGrid; ix++) {
+        const tx = anchorGrid === 1 ? 0.5 : ix / (anchorGrid - 1);
+        const x = xmin + (xmax - xmin) * tx;
+        rows.push({ x, y, r: 0, w: anchorWeight });
+      }
+    }
+  }
+
+  const N = rows.length;
   const A = mathjs.zeros(N, M);
-  const Z = mathjs.zeros(N, 1);
+  const R = mathjs.zeros(N, 1);
+  const W = mathjs.zeros(N, N);
 
   for (let r = 0; r < N; r++) {
-    const { x, y, z } = pts[r];
-    Z.set([r, 0], z);
+    const { x, y, r: rr, w } = rows[r];
+    R.set([r, 0], rr);
+    W.set([r, r], Math.max(1e-8, w));
     for (let c = 0; c < M; c++) {
       const { i, j } = basis[c];
       A.set([r, c], Math.pow(x, i) * Math.pow(y, j));
     }
   }
 
+  // Weighted normal equations: (A^T W A + λI) w = A^T W R
   const AT = mathjs.transpose(A);
-  const ATA = mathjs.multiply(AT, A);
-  const ATZ = mathjs.multiply(AT, Z);
-
-  const lambda = 1e-8;
+  const ATW = mathjs.multiply(AT, W);
+  const ATWA = mathjs.multiply(ATW, A);
+  const ATWR = mathjs.multiply(ATW, R);
   const I = mathjs.identity(M);
-  const ATAreg = mathjs.add(ATA, mathjs.multiply(lambda, I));
+  const ATWAreg = mathjs.add(ATWA, mathjs.multiply(lambda, I));
 
-  let W;
+  let wSol;
   try {
-    W = mathjs.lusolve(ATAreg, ATZ);
+    wSol = mathjs.lusolve(ATWAreg, ATWR);
   } catch {
     return { ok: false, reason: "solve 실패" };
   }
 
-  const terms = basis.map((b, idx) => ({
-    i: b.i,
-    j: b.j,
-    coef: Number(W.get([idx, 0])),
-  }));
-
-  return { ok: true, expr: buildPolyExpr(terms), degree: d };
+  const terms = basis.map((b, idx) => ({ i: b.i, j: b.j, coef: Number(wSol.get([idx, 0])) }));
+  const deltaExpr = buildPolyExpr(terms);
+  return { ok: true, deltaExpr, degree: d };
 }
 
 export default function Surface3DView({
   surface3d,
   onChange,
-
-  // ✅ Studio에서 reducer로 직접 연결하고 싶을 때(권장)
   onPointAdd,
   onPointRemove,
 }) {
@@ -115,7 +158,6 @@ export default function Surface3DView({
     const s = surface3d ?? {};
     return {
       expr: s.expr ?? "sin(x) * cos(y)",
-      // baseExpr가 있으면 Canvas에서 bounds에 같이 고려 가능(필요 시)
       baseExpr: s.baseExpr ?? null,
 
       xMin: Number.isFinite(Number(s.xMin)) ? Number(s.xMin) : -5,
@@ -136,115 +178,111 @@ export default function Surface3DView({
     };
   }, [surface3d]);
 
+  const commit = useCallback((patch) => onChange?.(patch), [onChange]);
 
-// ✅ 드래그 중 100ms throttled fit (preview), 드래그 끝에서 1회 final fit
-// - previewExpr는 로컬 상태로만 유지하여 Undo/Redo 히스토리 오염을 방지합니다.
-const [previewExpr, setPreviewExpr] = useState(null);
-const lastFitTsRef = useRef(0);
-const pendingTimerRef = useRef(null);
-const lastMarkersRef = useRef(null);
+  // ✅ 드래그 중 100ms throttled fit (preview), 드래그 끝에서 1회 final fit
+  // - previewExpr는 로컬 상태로만 유지하여 Undo/Redo 히스토리 오염을 방지합니다.
+  const [previewExpr, setPreviewExpr] = useState(null);
+  const lastFitTsRef = useRef(0);
+  const pendingTimerRef = useRef(null);
+  const lastMarkersRef = useRef(null);
 
-const clearPending = useCallback(() => {
-  if (pendingTimerRef.current) {
-    clearTimeout(pendingTimerRef.current);
-    pendingTimerRef.current = null;
-  }
-}, []);
+  const clearPending = useCallback(() => {
+    if (pendingTimerRef.current) {
+      clearTimeout(pendingTimerRef.current);
+      pendingTimerRef.current = null;
+    }
+  }, []);
 
-useEffect(() => {
-  // 외부에서 expr/degree가 바뀌면 preview는 해제
-  setPreviewExpr(null);
-  clearPending();
-  lastFitTsRef.current = 0;
-  lastMarkersRef.current = null;
-}, [merged.expr, merged.degree, clearPending]);
-
-useEffect(() => {
-  return () => {
+  useEffect(() => {
+    setPreviewExpr(null);
     clearPending();
-  };
-}, [clearPending]);
+    lastFitTsRef.current = 0;
+    lastMarkersRef.current = null;
+  }, [merged.expr, merged.degree, clearPending]);
 
-  const commit = useCallback(
-    (patch) => {
-      onChange?.(patch);
-    },
-    [onChange]
-  );
+  useEffect(() => () => clearPending(), [clearPending]);
 
   const handleMarkersChange = useCallback(
-  (nextMarkers, { fit = false } = {}) => {
-    commit({ markers: nextMarkers });
-    lastMarkersRef.current = nextMarkers;
+    (nextMarkers, { fit = false } = {}) => {
+      commit({ markers: nextMarkers });
+      lastMarkersRef.current = nextMarkers;
 
-    if (!merged.editMode) return;
+      if (!merged.editMode) return;
 
-    const doFit = (ms, { final } = { final: false }) => {
-      const res = fitSurfacePolynomial(ms, merged.degree);
-      if (res.ok) {
-        if (final) {
-          commit({ expr: res.expr });
+      const baseRhs = stripEq(merged.expr || "0") || "0";
+      const baseFn = makeScalarFn(baseRhs);
+      const domain = { xMin: merged.xMin, xMax: merged.xMax, yMin: merged.yMin, yMax: merged.yMax };
+
+      const composeExpr = (deltaExpr) => {
+        if (!deltaExpr || deltaExpr === "0") return baseRhs;
+        return `(${baseRhs}) + (${deltaExpr})`;
+      };
+
+      const doFit = (ms, { final } = { final: false }) => {
+        const res = fitSurfaceDeltaPolynomial(ms, merged.degree, baseFn, domain, {
+          markerWeight: 1.0,
+          anchorWeight: 0.25,
+          anchorGrid: 10,
+          lambda: 1e-4,
+        });
+        if (res.ok) {
+          const composed = composeExpr(res.deltaExpr);
+          if (final) {
+            commit({ expr: composed });
+            setPreviewExpr(null);
+          } else {
+            setPreviewExpr(composed);
+          }
+        } else if (final) {
+          console.warn("[Surface3DView] surface fit failed:", res.reason);
           setPreviewExpr(null);
-        } else {
-          setPreviewExpr(res.expr);
         }
-      } else if (final) {
-        console.warn("[Surface3DView] surface fit failed:", res.reason);
-        setPreviewExpr(null);
-      }
-    };
+      };
 
-    // ✅ 드래그 끝: 최종 1회 fit + state 반영
-    if (fit) {
-      clearPending();
-      doFit(nextMarkers, { final: true });
-      return;
-    }
-
-    // ✅ 드래그 중: 100ms마다 preview fit
-    const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
-    const interval = 100;
-    const elapsed = now - (lastFitTsRef.current || 0);
-
-    if (elapsed >= interval) {
-      lastFitTsRef.current = now;
-      doFit(nextMarkers, { final: false });
-      return;
-    }
-
-    if (!pendingTimerRef.current) {
-      pendingTimerRef.current = setTimeout(() => {
-        pendingTimerRef.current = null;
-        const latest = lastMarkersRef.current;
-        if (!latest) return;
-        const t = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
-        lastFitTsRef.current = t;
-        doFit(latest, { final: false });
-      }, Math.max(0, interval - elapsed));
-    }
-  },
-  [commit, merged.degree, merged.editMode, clearPending]
-);
-
-  // ✅ Point Add/Remove: Studio에서 내려오면 그대로 사용, 아니면 View에서 markers 패치로 fallback
-  const handlePointAdd = useCallback(
-    (pt) => {
-      if (typeof onPointAdd === "function") {
-        onPointAdd(pt);
+      // ✅ 드래그 끝: 최종 1회 fit + state 반영
+      if (fit) {
+        clearPending();
+        doFit(nextMarkers, { final: true });
         return;
       }
-      const next = [...(merged.markers || []), pt];
-      commit({ markers: next });
+
+      // ✅ 드래그 중: 100ms마다 preview fit
+      const now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+      const interval = 100;
+      const elapsed = now - (lastFitTsRef.current || 0);
+
+      if (elapsed >= interval) {
+        lastFitTsRef.current = now;
+        doFit(nextMarkers, { final: false });
+        return;
+      }
+
+      if (!pendingTimerRef.current) {
+        pendingTimerRef.current = setTimeout(() => {
+          pendingTimerRef.current = null;
+          const latest = lastMarkersRef.current;
+          if (!latest) return;
+          const t = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+          lastFitTsRef.current = t;
+          doFit(latest, { final: false });
+        }, Math.max(0, interval - elapsed));
+      }
+    },
+    [commit, merged.editMode, merged.expr, merged.degree, merged.xMin, merged.xMax, merged.yMin, merged.yMax, clearPending]
+  );
+
+  const handlePointAdd = useCallback(
+    (pt) => {
+      if (typeof onPointAdd === "function") return onPointAdd(pt);
+      commit({ markers: [...(merged.markers || []), pt] });
     },
     [onPointAdd, merged.markers, commit]
   );
 
   const handlePointRemove = useCallback(
     ({ id, index } = {}) => {
-      if (typeof onPointRemove === "function") {
-        onPointRemove({ id, index });
-        return;
-      }
+      if (typeof onPointRemove === "function") return onPointRemove({ id, index });
       const arr = Array.isArray(merged.markers) ? [...merged.markers] : [];
       if (id != null) {
         const k = arr.findIndex((m) => (m?.id ?? null) === id);
@@ -258,9 +296,7 @@ useEffect(() => {
     [onPointRemove, merged.markers, commit]
   );
 
-  if (!surface3d) {
-    return <div className="empty-hint">3D 곡면 정보가 없습니다.</div>;
-  }
+  if (!surface3d) return <div className="empty-hint">3D 곡면 정보가 없습니다.</div>;
 
   return (
     <div className="graph-view">
