@@ -13,7 +13,9 @@
 ### 2) Vault (Graph-based Knowledge / Tag Clustering)
 ![GraphMind Vault](assets/vault.png)
 
-### 3) Studio (Surface3D Editing)
+### 3) Studio (Graph, Curve3D, Surface3D Editing)
+![GraphMind Studio - Graph](assets/graph.png)
+![GraphMind Studio - Curve3D](assets/curve3d.png)
 ![GraphMind Studio - Surface3D](assets/surface3d.png)
 
 ---
