@@ -577,3 +577,219 @@
   transform: translateY(-1px);
   transition: all 0.12s ease-out;
 }
+
+/* 결과 영역을 카드처럼 */
+.ai-panel-result {
+  margin-top: 10px;
+}
+
+/* 기존 pre에 적용되는 스타일 강화 */
+.ai-panel-result-text {
+  white-space: pre-wrap;          /* 줄바꿈 유지 + 자동 줄바꿈 */
+  word-break: break-word;
+  font-size: 13.5px;
+  line-height: 1.65;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.04);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+  max-height: 260px;
+  overflow: auto;
+}
+
+/* 탭별로 약간 톤 차이 주고 싶으면(선택) */
+.ai-panel-result-text.is-control {
+  border-color: rgba(80, 200, 255, 0.25);
+  background: rgba(80, 200, 255, 0.06);
+}
+
+/* placeholder도 정리 */
+.ai-panel-placeholder {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px dashed rgba(255,255,255,0.18);
+  color: rgba(255,255,255,0.55);
+}
+
+.ai-md-card{
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.04);
+  box-shadow: 0 10px 26px rgba(0,0,0,0.28);
+  max-height: 300px;
+  overflow: auto;
+}
+
+/* Markdown 기본 타이포 */
+.ai-md-card :where(p, li){
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+
+.ai-md-card :where(strong){
+  font-weight: 750;
+}
+
+.ai-md-card :where(ol, ul){
+  padding-left: 18px;
+  margin: 8px 0;
+}
+
+.ai-md-card :where(h1,h2,h3){
+  margin: 10px 0 6px;
+  font-weight: 800;
+}
+
+/* 수식이 튀지 않게 */
+.ai-md-card :where(.katex){
+  font-size: 1.02em;
+}
+
+/* 탭별 강조(선택) */
+.ai-md-card.control{
+  border-color: rgba(80, 200, 255, 0.25);
+  background: rgba(80, 200, 255, 0.06);
+}
+
+/* 패널이 height를 갖도록(내부 스크롤 안정화) */
+.ai-panel{
+  position: fixed;
+  right: 12px;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* body는 남은 높이를 차지 */
+.ai-panel-body{
+  flex: 1 1 auto;
+  overflow: auto;
+}
+
+/* 리사이즈 핸들(우하단) */
+.ai-panel-resizer{
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.18);
+}
+.ai-panel-resizer:hover{
+  background: rgba(255,255,255,0.28);
+}
+
+/* 현재 탭 요약 카드 */
+.ai-ctx-card{
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.04);
+  margin-bottom: 8px;
+}
+.ai-ctx-title{
+  font-weight: 800;
+  margin-bottom: 8px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.ai-ctx-badge{
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.10);
+}
+.ai-ctx-row{
+  display: flex;
+  gap: 10px;
+  margin: 6px 0;
+}
+.ai-ctx-k{
+  width: 72px;
+  opacity: 0.65;
+}
+.ai-ctx-v{
+  flex: 1;
+}
+.ai-mono{
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  word-break: break-word;
+}
+.ai-ctx-actions{
+  display: flex;
+  justify-content: flex-end;
+  margin: 6px 0 10px;
+}
+/* 헤더 드래그 UX */
+.ai-panel-header-draggable{
+  cursor: grab;
+}
+.ai-panel-header-draggable:active{
+  cursor: grabbing;
+}
+
+/* quick example chips */
+.ai-quick-examples{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 10px;
+}
+.ai-chip{
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.06);
+  font-size: 12.5px;
+  opacity: 0.9;
+  cursor: pointer;
+}
+.ai-chip:hover{
+  background: rgba(255,255,255,0.10);
+}
+/* =========================
+   Pretty Scrollbar (AIPanel)
+   ========================= */
+
+/* Firefox */
+.ai-panel *{
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.28) rgba(255,255,255,0.06);
+}
+
+/* Chrome / Edge / Safari */
+.ai-panel *::-webkit-scrollbar{
+  width: 10px;         /* 세로 스크롤 두께 */
+  height: 10px;        /* 가로 스크롤 두께 */
+}
+
+.ai-panel *::-webkit-scrollbar-track{
+  background: rgba(255,255,255,0.05);
+  border-radius: 999px;
+}
+
+.ai-panel *::-webkit-scrollbar-thumb{
+  background: rgba(255,255,255,0.22);
+  border-radius: 999px;
+  border: 2px solid rgba(0,0,0,0);         /* thumb가 둥글게 떠보이게 */
+  background-clip: padding-box;            /* border 영역 제외하고 채우기 */
+}
+
+.ai-panel *::-webkit-scrollbar-thumb:hover{
+  background: rgba(255,255,255,0.32);
+}
+
+.ai-panel *::-webkit-scrollbar-thumb:active{
+  background: rgba(255,255,255,0.40);
+}
+
+/* 코너(가로/세로 만나는 곳) */
+.ai-panel *::-webkit-scrollbar-corner{
+  background: transparent;
+}

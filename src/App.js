@@ -1,4 +1,5 @@
 import { Routes, Route } from "react-router-dom";
+import "katex/dist/katex.min.css";
 import Intro from "./pages/Intro";
 import Vault from "./pages/Vault";
 import Studio from "./pages/Studio";

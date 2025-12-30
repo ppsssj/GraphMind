@@ -1216,11 +1216,13 @@ export default function Curve3DCanvas({
     });
   }, [markers, xtRef, ytRef, ztRef]);
 
+  const isAIMarker = (m) => m?._focusNonce !== undefined && m?._focusNonce !== null;
+
   // 노드 기반 커널 변형(즉시 프리뷰)
   const kernelDeform = useMemo(() => {
     const tPoints = (displayMarkers || []).filter(
-      (m) => typeof m.t === "number"
-    );
+    (m) => typeof m.t === "number" && !isAIMarker(m)
+  );
     const s = Math.max(1e-6, Number(deformSigma) || 0.6);
     const eps = 1e-9;
 
@@ -1553,6 +1555,8 @@ export default function Curve3DCanvas({
     }, 0);
   };
 
+
+  
   return (
     <div
       style={{
