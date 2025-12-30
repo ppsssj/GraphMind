@@ -150,10 +150,23 @@ const coeffsToFn = (coeffs) => (x) => {
   }
   return y;
 };
+function normalizeNestedAssign(expr) {
+  const s = String(expr ?? "");
+  // ((x(t)=BASE) + (REST))  ->  x(t) = ((BASE) + (REST))
+  const m = s.match(
+    /^\(\(\s*([xyz]\(t\))\s*=\s*([\s\S]*?)\)\s*\+\s*\(([\s\S]+)\)\)\s*$/
+  );
+  if (!m) return s;
+  const lhs = m[1];
+  const base = (m[2] ?? "0").trim() || "0";
+  const rest = (m[3] ?? "0").trim() || "0";
+  return `${lhs} = ((${base}) + (${rest}))`;
+}
 
 // ── AI Command helpers (Curve3D / Surface3D) ─────────────────────────────────
 function aiMakeParamFn(expr, paramName = "t") {
   if (!expr) return () => 0;
+  expr = normalizeNestedAssign(expr);
   const rhs = String(expr).includes("=") ? String(expr).split("=").pop() : expr;
   const trimmed = String(rhs ?? "").trim() || "0";
 
@@ -212,8 +225,12 @@ function aiFitCurve3DFromMarkers({
 }) {
   const ms = Array.isArray(markers) ? markers : [];
   const tPoints = ms.filter(
-    (m) => typeof m?.t === "number" && Number.isFinite(m.t)
+    (m) =>
+      typeof m?.t === "number" &&
+      Number.isFinite(m.t) &&
+      (!m.kind || m.kind === "control")
   );
+
   if (tPoints.length < 2) return null;
 
   const xt = aiMakeParamFn(baseXExpr ?? "0", "t");
@@ -234,22 +251,30 @@ function aiFitCurve3DFromMarkers({
     dz.push({ t, delta: Number(m.z) - bz });
   }
 
-  const baseX = String(baseXExpr ?? "0").trim() || "0";
-  const baseY = String(baseYExpr ?? "0").trim() || "0";
-  const baseZ = String(baseZExpr ?? "0").trim() || "0";
+  const rhsOf = (expr) => {
+    const s = String(expr ?? "").trim();
+    if (!s) return "0";
+    if (s.includes("=")) return s.split("=").pop().trim() || "0";
+    return s;
+  };
 
-  const newXExpr = `((${baseX}) + (${aiBuildKernelDeformExpr(
+  const baseXRhs = rhsOf(baseXExpr ?? "0");
+  const baseYRhs = rhsOf(baseYExpr ?? "0");
+  const baseZRhs = rhsOf(baseZExpr ?? "0");
+
+  const newXExpr = `x(t) = ((${baseXRhs}) + (${aiBuildKernelDeformExpr(
     dx,
     deformSigma
   )}))`;
-  const newYExpr = `((${baseY}) + (${aiBuildKernelDeformExpr(
+  const newYExpr = `y(t) = ((${baseYRhs}) + (${aiBuildKernelDeformExpr(
     dy,
     deformSigma
   )}))`;
-  const newZExpr = `((${baseZ}) + (${aiBuildKernelDeformExpr(
+  const newZExpr = `z(t) = ((${baseZRhs}) + (${aiBuildKernelDeformExpr(
     dz,
     deformSigma
   )}))`;
+
   return { xExpr: newXExpr, yExpr: newYExpr, zExpr: newZExpr };
 }
 
@@ -1876,7 +1901,9 @@ export default function Studio() {
           };
         };
 
-        const nextMarkers = [];
+        // ✅ 기존 마커 유지 + AI 마커 추가
+        const nextMarkers = cloneMarkers(c3.markers);
+        let baseLen = nextMarkers.length; // AI로 추가된 마커만 _focusNonce 부여용 기준
 
         const fmt = (v, d = 2) => {
           const n = Number(v);
@@ -1895,6 +1922,7 @@ export default function Studio() {
 
           if (action === "clear_markers") {
             nextMarkers.length = 0;
+            baseLen = 0;
             continue;
           }
 
@@ -1903,11 +1931,26 @@ export default function Studio() {
             action === "recalculate_from_markers"
           ) {
             // markers will be applied after the loop; fitting is done after that.
-            // This is intentionally handled below.
             continue;
           }
 
           const exprs = pickExprSet(target);
+
+          // ✅ 디버그: AI가 어떤 곡선을 읽는지
+          console.log(
+            "[AICommand][curve3d] action=",
+            action,
+            "target=",
+            target
+          );
+          console.log("[AICommand][curve3d] exprs=", exprs);
+          console.log(
+            "[AICommand][curve3d] current c3 xExpr=",
+            c3.xExpr,
+            "baseXExpr=",
+            c3.baseXExpr
+          );
+
           const xt = aiMakeParamFn(exprs.x, "t");
           const yt = aiMakeParamFn(exprs.y, "t");
           const zt = aiMakeParamFn(exprs.z, "t");
@@ -1918,6 +1961,7 @@ export default function Studio() {
             return zt(t);
           };
 
+          // ── extrema ──────────────────────────────
           if (action === "mark_max" || action === "find_max") {
             const max = sampleExtremum(axisFn, tMin, tMax, samples, "max");
             if (max) {
@@ -1958,6 +2002,7 @@ export default function Studio() {
             continue;
           }
 
+          // ── roots ────────────────────────────────
           if (action === "mark_roots" || action === "find_roots") {
             const roots = findRoots(axisFn, tMin, tMax, samples, maxRoots);
             roots.forEach((t, idx) => {
@@ -1974,110 +2019,118 @@ export default function Studio() {
                 label: `root(${axis}) ${fmtXYZ(X, Y, Z)}`,
               });
             });
-            if (action === "slice_t") {
-              const t = Number(args.t);
-              if (!Number.isFinite(t)) {
-                warn("slice_t requires args.t (number)");
-                continue;
+            continue;
+          }
+
+          // ── slice at t ───────────────────────────
+          if (action === "slice_t") {
+            const t = Number(args.t);
+            if (!Number.isFinite(t)) {
+              warn("slice_t requires args.t (number)");
+              continue;
+            }
+            const X = xt(t),
+              Y = yt(t),
+              Z = zt(t);
+            nextMarkers.push({
+              id: `c3-slice-${Date.now()}`,
+              kind: "slice",
+              t,
+              x: X,
+              y: Y,
+              z: Z,
+              label: `t=${fmt(t, 3)} ${fmtXYZ(X, Y, Z)}`,
+            });
+            continue;
+          }
+
+          // ── tangent at t ─────────────────────────
+          if (action === "tangent_at") {
+            const t0 = Number(args.t);
+            if (!Number.isFinite(t0)) {
+              warn("tangent_at requires args.t (number)");
+              continue;
+            }
+            const dt = Math.max(1e-6, Number(args.dt) || 1e-3);
+            const tA = Math.max(tMin, Math.min(tMax, t0 - dt));
+            const tB = Math.max(tMin, Math.min(tMax, t0 + dt));
+            const denom = Math.max(1e-12, tB - tA);
+
+            const dx = (xt(tB) - xt(tA)) / denom;
+            const dy = (yt(tB) - yt(tA)) / denom;
+            const dz = (zt(tB) - zt(tA)) / denom;
+
+            const X = xt(t0),
+              Y = yt(t0),
+              Z = zt(t0);
+
+            nextMarkers.push({
+              id: `c3-tan-${Date.now()}`,
+              kind: "tangent",
+              t: t0,
+              x: X,
+              y: Y,
+              z: Z,
+              label: `tangent @ t=${fmt(t0, 3)} dir=(${fmt(dx, 3)}, ${fmt(
+                dy,
+                3
+              )}, ${fmt(dz, 3)})`,
+            });
+            continue;
+          }
+
+          // ── closest point ────────────────────────
+          if (action === "closest_to_point") {
+            const p = (() => {
+              const raw = args.point;
+              if (raw && typeof raw === "object") {
+                const px = Number(raw.x),
+                  py = Number(raw.y),
+                  pz = Number(raw.z);
+                if ([px, py, pz].every(Number.isFinite))
+                  return { x: px, y: py, z: pz };
               }
+              if (typeof raw === "string") {
+                const parts = raw
+                  .split(/[, ]+/)
+                  .map((s) => Number(s))
+                  .filter(Number.isFinite);
+                if (parts.length >= 3)
+                  return { x: parts[0], y: parts[1], z: parts[2] };
+              }
+              return { x: 0, y: 0, z: 0 };
+            })();
+
+            const dist2 = (t) => {
+              const dx = xt(t) - p.x;
+              const dy = yt(t) - p.y;
+              const dz = zt(t) - p.z;
+              return dx * dx + dy * dy + dz * dz;
+            };
+
+            const best = sampleExtremum(dist2, tMin, tMax, samples, "min");
+            if (best) {
+              const t = best.x;
               const X = xt(t),
                 Y = yt(t),
                 Z = zt(t);
+              const d = Math.sqrt(Math.max(0, dist2(t)));
               nextMarkers.push({
-                id: `c3-slice-${Date.now()}`,
-                kind: "slice",
+                id: `c3-close-${Date.now()}`,
+                kind: "closest",
                 t,
                 x: X,
                 y: Y,
                 z: Z,
-                label: `t=${fmt(t, 3)} ${fmtXYZ(X, Y, Z)}`,
+                label: `closest to (${fmt(p.x)}, ${fmt(p.y)}, ${fmt(
+                  p.z
+                )}) d=${fmt(d, 3)} ${fmtXYZ(X, Y, Z)}`,
               });
-              continue;
             }
-
-            if (action === "tangent_at") {
-              const t0 = Number(args.t);
-              if (!Number.isFinite(t0)) {
-                warn("tangent_at requires args.t (number)");
-                continue;
-              }
-              const dt = Math.max(1e-6, Number(args.dt) || 1e-3);
-              const tA = Math.max(tMin, Math.min(tMax, t0 - dt));
-              const tB = Math.max(tMin, Math.min(tMax, t0 + dt));
-              const denom = Math.max(1e-12, tB - tA);
-              const dx = (xt(tB) - xt(tA)) / denom;
-              const dy = (yt(tB) - yt(tA)) / denom;
-              const dz = (zt(tB) - zt(tA)) / denom;
-              const X = xt(t0),
-                Y = yt(t0),
-                Z = zt(t0);
-              nextMarkers.push({
-                id: `c3-tan-${Date.now()}`,
-                kind: "tangent",
-                t: t0,
-                x: X,
-                y: Y,
-                z: Z,
-                label: `tangent @ t=${fmt(t0, 3)} dir=(${fmt(dx, 3)}, ${fmt(
-                  dy,
-                  3
-                )}, ${fmt(dz, 3)})`,
-              });
-              continue;
-            }
-
-            if (action === "closest_to_point") {
-              const p = (() => {
-                const raw = args.point;
-                if (raw && typeof raw === "object") {
-                  const px = Number(raw.x),
-                    py = Number(raw.y),
-                    pz = Number(raw.z);
-                  if ([px, py, pz].every(Number.isFinite))
-                    return { x: px, y: py, z: pz };
-                }
-                if (typeof raw === "string") {
-                  const parts = raw
-                    .split(/[, ]+/)
-                    .map((s) => Number(s))
-                    .filter(Number.isFinite);
-                  if (parts.length >= 3)
-                    return { x: parts[0], y: parts[1], z: parts[2] };
-                }
-                return { x: 0, y: 0, z: 0 };
-              })();
-
-              const dist2 = (t) => {
-                const dx = xt(t) - p.x;
-                const dy = yt(t) - p.y;
-                const dz = zt(t) - p.z;
-                return dx * dx + dy * dy + dz * dz;
-              };
-              const best = sampleExtremum(dist2, tMin, tMax, samples, "min");
-              if (best) {
-                const t = best.x;
-                const X = xt(t),
-                  Y = yt(t),
-                  Z = zt(t);
-                const d = Math.sqrt(Math.max(0, dist2(t)));
-                nextMarkers.push({
-                  id: `c3-close-${Date.now()}`,
-                  kind: "closest",
-                  t,
-                  x: X,
-                  y: Y,
-                  z: Z,
-                  label: `closest to (${fmt(p.x)}, ${fmt(p.y)}, ${fmt(
-                    p.z
-                  )}) d=${fmt(d, 3)} ${fmtXYZ(X, Y, Z)}`,
-                });
-              }
-              continue;
-            }
-
             continue;
           }
 
+          // ── intersections ────────────────────────
           if (
             action === "mark_intersections" ||
             action === "find_intersections"
@@ -2114,12 +2167,19 @@ export default function Studio() {
           warn("unsupported action for curve3d", action);
         }
 
-        // Apply markers first
+        // Apply markers (기존 마커 유지 + AI로 추가된 마커만 _focusNonce 부여)
         const focusNonce = Date.now();
-        const markersForState = nextMarkers.map((m) => ({
-          ...m,
-          _focusNonce: focusNonce,
-        }));
+        const markersForState = nextMarkers.map((m, idx) =>
+          idx >= baseLen ? { ...m, _focusNonce: focusNonce } : m
+        );
+
+        console.log(
+          "[AICommand][curve3d] markers before=",
+          (c3.markers || []).length,
+          "after=",
+          markersForState.length
+        );
+
         updateCurve3D(tabId, { markers: markersForState });
         log("curve3d markers applied", {
           tabId,
@@ -2132,10 +2192,12 @@ export default function Studio() {
             c.action === "fit_from_markers" ||
             c.action === "recalculate_from_markers"
         );
+
         if (wantsFit) {
           const baseXExpr = c3.baseXExpr ?? c3.xExpr ?? "0";
           const baseYExpr = c3.baseYExpr ?? c3.yExpr ?? "0";
           const baseZExpr = c3.baseZExpr ?? c3.zExpr ?? "0";
+
           const fitPatch = aiFitCurve3DFromMarkers({
             markers: markersForState,
             baseXExpr,
@@ -2143,6 +2205,7 @@ export default function Studio() {
             baseZExpr,
             deformSigma: c3.deformSigma ?? 0.6,
           });
+
           if (fitPatch) {
             updateCurve3D(tabId, fitPatch);
             log("curve3d fit committed", {
@@ -2155,6 +2218,7 @@ export default function Studio() {
             warn("curve3d fit requested but insufficient markers");
           }
         }
+
         return;
       }
 

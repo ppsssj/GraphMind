@@ -15,17 +15,36 @@ const math = create(all, {});
 // -----------------------------
 // math expr -> param fn
 // -----------------------------
-function makeParamFn(expr, paramName = "t") {
-  if (!expr) return () => 0;
+function normalizeNestedAssign(expr) {
+  const s = String(expr ?? "");
+  // ((x(t)=BASE) + (REST))  ->  x(t) = ((BASE) + (REST))
+  const m = s.match(
+    /^\(\(\s*([xyz]\(t\))\s*=\s*([\s\S]*?)\)\s*\+\s*\(([\s\S]+)\)\)\s*$/
+  );
+  if (!m) return s;
+  const lhs = m[1];
+  const base = (m[2] ?? "0").trim() || "0";
+  const rest = (m[3] ?? "0").trim() || "0";
+  return `${lhs} = ((${base}) + (${rest}))`;
+}
 
-  const rhs = expr.includes("=") ? expr.split("=").pop() : expr;
-  const trimmed = String(rhs ?? "").trim() || "0";
+function makeParamFn(expr, paramName = "t") {
+  const normalized = normalizeNestedAssign(expr);
+  const rhs = normalized.includes("=")
+    ? normalized.split("=").pop()
+    : normalized;
+
+  const trimmed = String(rhs ?? "").trim();
+  if (!trimmed) return () => 0;
 
   let compiled;
   try {
     compiled = math.parse(trimmed).compile();
   } catch (e) {
-    console.warn("Curve3D: failed to parse expression:", expr, e);
+    console.warn("Curve3D: failed to parse expression:", normalized, {
+      rhs: trimmed,
+      error: e,
+    });
     return () => 0;
   }
 
@@ -1216,13 +1235,14 @@ export default function Curve3DCanvas({
     });
   }, [markers, xtRef, ytRef, ztRef]);
 
-  const isAIMarker = (m) => m?._focusNonce !== undefined && m?._focusNonce !== null;
+  const isAIMarker = (m) =>
+    m?._focusNonce !== undefined && m?._focusNonce !== null;
 
   // 노드 기반 커널 변형(즉시 프리뷰)
   const kernelDeform = useMemo(() => {
     const tPoints = (displayMarkers || []).filter(
-    (m) => typeof m.t === "number" && !isAIMarker(m)
-  );
+      (m) => typeof m.t === "number" && !isAIMarker(m)
+    );
     const s = Math.max(1e-6, Number(deformSigma) || 0.6);
     const eps = 1e-9;
 
@@ -1433,6 +1453,7 @@ export default function Curve3DCanvas({
       ...ms,
       {
         id: makeId(),
+        kind: "control",
         t: typeof t === "number" && Number.isFinite(t) ? t : undefined,
         x: Number.isFinite(x) ? x : 0,
         y: Number.isFinite(y) ? y : 0,
@@ -1482,8 +1503,9 @@ export default function Curve3DCanvas({
     setTimeout(() => {
       try {
         const tPoints = (displayMarkers || []).filter(
-          (m) => typeof m.t === "number"
+          (m) => typeof m.t === "number" && Number.isFinite(m.t)
         );
+
         if (tPoints.length < 2) return;
 
         const s = Math.max(1e-6, Number(deformSigma) || 0.6);
@@ -1536,13 +1558,26 @@ export default function Curve3DCanvas({
           dz.push({ t, delta: Number(m.z) - bz });
         }
 
-        const baseX = String(refXExpr ?? "0").trim() || "0";
-        const baseY = String(refYExpr ?? "0").trim() || "0";
-        const baseZ = String(refZExpr ?? "0").trim() || "0";
+        const rhsOf = (expr) => {
+          const s = String(expr ?? "").trim();
+          if (!s) return "0";
+          if (s.includes("=")) return s.split("=").pop().trim() || "0";
+          return s;
+        };
 
-        const newXExpr = `((${baseX}) + (${buildKernelDeformExpr(dx)}))`;
-        const newYExpr = `((${baseY}) + (${buildKernelDeformExpr(dy)}))`;
-        const newZExpr = `((${baseZ}) + (${buildKernelDeformExpr(dz)}))`;
+        const baseXRhs = rhsOf(refXExpr ?? "0");
+        const baseYRhs = rhsOf(refYExpr ?? "0");
+        const baseZRhs = rhsOf(refZExpr ?? "0");
+
+        const newXExpr = `x(t) = ((${baseXRhs}) + (${buildKernelDeformExpr(
+          dx
+        )}))`;
+        const newYExpr = `y(t) = ((${baseYRhs}) + (${buildKernelDeformExpr(
+          dy
+        )}))`;
+        const newZExpr = `z(t) = ((${baseZRhs}) + (${buildKernelDeformExpr(
+          dz
+        )}))`;
 
         onRecalculateExpressions?.({
           xExpr: newXExpr,
@@ -1555,8 +1590,6 @@ export default function Curve3DCanvas({
     }, 0);
   };
 
-
-  
   return (
     <div
       style={{
