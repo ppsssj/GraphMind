@@ -13,7 +13,7 @@
 ### 2) Vault (Graph-based Knowledge / Tag Clustering)
 ![GraphMind Vault](assets/vault.png)
 
-### 3) Studio (Graph, Curve3D, Surface3D Editing)
+### 3) Studio (Graph, Curve3D, Surface3D, Array3D Editing)
 
 | Graph | Curve3D |
 |---|---|
