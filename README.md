@@ -19,9 +19,9 @@
 |---|---|
 | ![Graph](assets/graph.png) | ![Curve3D](assets/curve3d.png) |
 
-| Surface3D |
-|---|
-| ![Surface3D](assets/surface3d.png) |
+| Surface3D | Array3D |
+|---|---|
+| ![Surface3D](assets/surface3d.png) | ![Curve3D](assets/array3d.png) |
 
 
 ---
