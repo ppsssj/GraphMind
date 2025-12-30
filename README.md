@@ -5,7 +5,7 @@
 
 ---
 
-## 🖼️ Screenshots
+##  Screenshots
 
 ### 1) Landing (Product Intro)
 ![GraphMind Landing](assets/landing.png)
@@ -26,7 +26,7 @@
 
 ---
 
-## 🎯 프로젝트 개요
+##  프로젝트 개요
 
 - **목표**
   - 자연어/수식 입력 → 그래프(2D/3D) 생성 및 시각화
@@ -43,7 +43,7 @@
 
 ---
 
-## 🛠️ 기술 스택
+##  기술 스택
 
 - **Frontend / Visualization**
   - Three.js (3D 렌더링)
@@ -59,7 +59,7 @@
 
 ---
 
-## 🚀 주요 기능
+##  주요 기능
 
 ### 1) Equation / Natural Language Input
 - `z = x^2 + y^2`, `sin(x)*cos(y)` 등 수식 입력 지원
@@ -86,7 +86,7 @@
 
 ---
 
-## 📦 Getting Started
+##  Getting Started
 
 ```bash
 # install
