@@ -185,8 +185,8 @@ function GridAndAxes({
   const y1 = ymax;
 
   const zGrid = 0.0;
-  const zAxis = 0.01;
-  const axisThickness = 0.06;
+  const zAxis = 0.01; // z-fighting 방지
+  const axisThickness = 0.06; // surface/curve 쪽 느낌에 맞게 적당히 얇게
 
   const majorStep = Math.max(0.1, Number(gridStep) || 1);
   const div = Math.max(1, Math.floor(Number(minorDiv) || 4));
@@ -211,7 +211,6 @@ function GridAndAxes({
       majorSegs.push([x0, y, zGrid, x1, y, zGrid]);
     }
 
-    // full 모드에서만 minor를 쓰지만, 계산은 미리 해둬도 OK
     const minorSegs = [];
     const sxStart = snapUp(x0, minorStep);
     const syStart = snapUp(y0, minorStep);
@@ -230,10 +229,14 @@ function GridAndAxes({
     };
   }, [x0, x1, y0, y1, majorStep, minorStep]);
 
+  // === 축을 "중심(cx,cy)"가 아니라 "원점(0,0)"에 고정 ===
+  const showXAxis = y0 <= 0 && y1 >= 0; // y=0 이 bounds 안에 있을 때만
+  const showYAxis = x0 <= 0 && x1 >= 0; // x=0 이 bounds 안에 있을 때만
+
+  const sizeX = Math.max(1e-6, Math.abs(x1 - x0));
+  const sizeY = Math.max(1e-6, Math.abs(y1 - y0));
   const cx = (x0 + x1) / 2;
   const cy = (y0 + y1) / 2;
-  const sizeX = Math.max(1, Math.abs(x1 - x0));
-  const sizeY = Math.max(1, Math.abs(y1 - y0));
 
   return (
     <group>
@@ -293,22 +296,20 @@ function GridAndAxes({
         </group>
       )}
 
-      {/* axes */}
-      <mesh position={[cx, cy, zAxis]}>
-        <boxGeometry
-          key={`axisx-${sizeX}-${axisThickness}`}
-          args={[sizeX, axisThickness, axisThickness]}
-        />
-        <meshStandardMaterial color="#6039BC" />
-      </mesh>
+      {/* === axes (일반적인 축 느낌: 그리드보다 조금 더 밝은 회색) === */}
+      {showXAxis && (
+        <mesh position={[cx, 0, zAxis]}>
+          <boxGeometry args={[sizeX, axisThickness, axisThickness]} />
+          <meshStandardMaterial color="#cfd6e6" />
+        </mesh>
+      )}
 
-      <mesh position={[cx, cy, zAxis]}>
-        <boxGeometry
-          key={`axisy-${sizeY}-${axisThickness}`}
-          args={[axisThickness, sizeY, axisThickness]}
-        />
-        <meshStandardMaterial color="#6039BC" />
-      </mesh>
+      {showYAxis && (
+        <mesh position={[0, cy, zAxis]}>
+          <boxGeometry args={[axisThickness, sizeY, axisThickness]} />
+          <meshStandardMaterial color="#cfd6e6" />
+        </mesh>
+      )}
     </group>
   );
 }

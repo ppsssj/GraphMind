@@ -1,4 +1,24 @@
 // src/data/dummyEquations.js
+// ---- Array3D dummy helpers (for verification) ----
+const genZYX = (Z, Y, X, fn) =>
+  Array.from({ length: Z }, (_, z) =>
+    Array.from({ length: Y }, (_, y) =>
+      Array.from({ length: X }, (_, x) => fn(x, y, z))
+    )
+  );
+
+// Convert ZYX (data[z][y][x]) -> XYZ (data[x][y][z])
+const zyxToXyz = (zyx) => {
+  const Z = zyx.length;
+  const Y = zyx?.[0]?.length ?? 0;
+  const X = zyx?.[0]?.[0]?.length ?? 0;
+
+  return Array.from({ length: X }, (_, x) =>
+    Array.from({ length: Y }, (_, y) =>
+      Array.from({ length: Z }, (_, z) => zyx?.[z]?.[y]?.[x] ?? 0)
+    )
+  );
+};
 
 // 2D 수식 더미
 export const dummyEquations = [
@@ -127,6 +147,122 @@ export const dummyArrays3D = [
     links: [],
     updatedAt: "2025-09-04T08:40:00Z",
   },
+    // ✅ 렌더링 검증용: 축 끝점(3개) 마커 — ZYX
+  {
+    id: "arr3",
+    type: "array3d",
+    title: "Verify — Axis Markers (ZYX: data[z][y][x])",
+    axisOrder: "zyx",
+    content: genZYX(8, 8, 8, (x, y, z) => {
+      // (7,0,0)=X+, (0,7,0)=Y+, (0,0,7)=Z+
+      if (x === 7 && y === 0 && z === 0) return 3;
+      if (x === 0 && y === 7 && z === 0) return 2;
+      if (x === 0 && y === 0 && z === 7) return 1;
+      return 0;
+    }),
+    tags: ["voxel", "verify", "axis", "zyx"],
+    links: [],
+    updatedAt: "2025-09-04T10:00:00Z",
+  },
+
+  // ✅ 렌더링 검증용: 대각선 라인 — ZYX
+  {
+    id: "arr4",
+    type: "array3d",
+    title: "Verify — Diagonal Line (ZYX)",
+    axisOrder: "zyx",
+    content: genZYX(10, 10, 10, (x, y, z) => (x === y && y === z ? 1 : 0)),
+    tags: ["voxel", "verify", "diagonal", "zyx"],
+    links: [],
+    updatedAt: "2025-09-04T10:05:00Z",
+  },
+
+  // ✅ 렌더링 검증용: 3개 평면(슬랩) — ZYX
+  {
+    id: "arr5",
+    type: "array3d",
+    title: "Verify — Three Slabs (ZYX: x=2, y=5, z=7 planes)",
+    axisOrder: "zyx",
+    content: genZYX(12, 12, 12, (x, y, z) => {
+      if (x === 2) return 1;
+      if (y === 5) return 1;
+      if (z === 7) return 1;
+      return 0;
+    }),
+    tags: ["voxel", "verify", "slab", "zyx"],
+    links: [],
+    updatedAt: "2025-09-04T10:10:00Z",
+  },
+
+  // ✅ 렌더링 검증용: 구(sphere) — ZYX
+  {
+    id: "arr6",
+    type: "array3d",
+    title: "Verify — Sphere (ZYX)",
+    axisOrder: "zyx",
+    content: genZYX(18, 18, 18, (x, y, z) => {
+      const cx = 8.5,
+        cy = 8.5,
+        cz = 8.5;
+      const r = 6.2;
+      const d2 = (x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2;
+      return d2 <= r * r ? 1 : 0;
+    }),
+    tags: ["voxel", "verify", "sphere", "zyx"],
+    links: [],
+    updatedAt: "2025-09-04T10:15:00Z",
+  },
+
+  // ✅ Threshold 테스트용: 값 그라디언트 — ZYX (threshold slider 검증)
+  {
+    id: "arr7",
+    type: "array3d",
+    title: "Verify — Gradient Values (ZYX: threshold test)",
+    axisOrder: "zyx",
+    content: genZYX(8, 8, 8, (x, y, z) => x + 2 * y + 3 * z), // 0~(7+14+21)=42
+    tags: ["voxel", "verify", "threshold", "zyx"],
+    links: [],
+    updatedAt: "2025-09-04T10:20:00Z",
+  },
+
+  // ✅ 동일한 축마커를 XYZ 포맷으로 변환한 데이터 (axisOrder="xyz" 검증용)
+  {
+    id: "arr8",
+    type: "array3d",
+    title: "Verify — Axis Markers (XYZ: data[x][y][z])",
+    axisOrder: "xyz",
+    content: zyxToXyz(
+      genZYX(8, 8, 8, (x, y, z) => {
+        if (x === 7 && y === 0 && z === 0) return 3;
+        if (x === 0 && y === 7 && z === 0) return 2;
+        if (x === 0 && y === 0 && z === 7) return 1;
+        return 0;
+      })
+    ),
+    tags: ["voxel", "verify", "axis", "xyz"],
+    links: [],
+    updatedAt: "2025-09-04T10:25:00Z",
+  },
+
+  // ✅ 동일한 슬랩을 XYZ 포맷으로 변환한 데이터 (axisOrder="xyz" 검증용)
+  {
+    id: "arr9",
+    type: "array3d",
+    title: "Verify — Three Slabs (XYZ)",
+    axisOrder: "xyz",
+    content: zyxToXyz(
+      genZYX(12, 12, 12, (x, y, z) => {
+        if (x === 2) return 1;
+        if (y === 5) return 1;
+        if (z === 7) return 1;
+        return 0;
+      })
+    ),
+    tags: ["voxel", "verify", "slab", "xyz"],
+    links: [],
+    updatedAt: "2025-09-04T10:30:00Z",
+  },
+
 ];
 
 // 3D 곡선 더미
